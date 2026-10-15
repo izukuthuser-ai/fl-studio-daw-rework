@@ -17,7 +17,7 @@ export const hooks = {
   openHelp: () => {},
   openPalette: () => {},
   openHistory: () => {},
-  toolSelector: () => {},
+  toolSelector: () => toast('Tools (F3) are available in the Piano roll and the Playlist', 'info', 1500),
 };
 
 // ---------------- patterns ----------------
@@ -25,9 +25,13 @@ export function selectPattern(id: string) {
   store.setUI({ currentPattern: id, plSource: { kind: 'pattern', ref: id } });
 }
 export function selectPatternIndex(i: number) {
-  const p = store.project.patterns[i];
-  if (p) selectPattern(p.id);
-  else toast(`Pattern ${i + 1} doesn't exist yet — press F4 for a new one`, 'info');
+  if (!store.project.patterns[i]) {
+    // FL behaviour: selecting an unused pattern number creates it
+    store.commit('New pattern', (pr) => {
+      while (pr.patterns.length <= i) pr.patterns.push(newPattern(pr.patterns.length));
+    });
+  }
+  selectPattern(store.project.patterns[i].id);
 }
 export function stepPattern(dir: 1 | -1) {
   const ps = store.project.patterns;

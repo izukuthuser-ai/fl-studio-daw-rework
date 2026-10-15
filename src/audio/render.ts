@@ -30,9 +30,32 @@ export async function renderProject(project: Project, o: RenderOpts): Promise<Au
   if (o.onlyTracks) {
     // solo the requested mixer tracks (and keep master)
     proj = JSON.parse(JSON.stringify(project));
+    const sel = new Set(o.onlyTracks);
+    // upstream: tracks that route into a selected track (recursively)
+    const feeds = new Set(sel);
+    for (let changed = true; changed; ) {
+      changed = false;
+      proj.mixer.forEach((m, i) => {
+        if (i > 0 && !feeds.has(i) && feeds.has(m.route)) {
+          feeds.add(i);
+          changed = true;
+        }
+      });
+    }
+    // downstream: the buses the selected tracks flow through on their way to master
+    const alive = new Set(feeds);
+    for (const t of sel) {
+      let cur = proj.mixer[t]?.route ?? 0;
+      for (let guard = 0; cur > 0 && guard < 256; guard++) {
+        alive.add(cur);
+        cur = proj.mixer[cur]?.route ?? 0;
+      }
+    }
     proj.mixer.forEach((m, i) => {
-      if (i > 0 && !o.onlyTracks!.includes(i)) m.mute = true;
+      if (i > 0 && !alive.has(i)) m.mute = true;
     });
+    // channels that feed a downstream bus directly would leak into the stem
+    for (const c of proj.channels) if (!feeds.has(c.mixer)) c.mute = true;
   }
   g.automated = o.mode === 'song' ? automatedTargets(proj) : new Set();
   g.sync(proj);

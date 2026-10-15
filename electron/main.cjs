@@ -90,6 +90,9 @@ app.on('window-all-closed', () => {
 
 // ---------------- IPC ----------------
 const AUDIO_EXT = /\.(wav|mp3|ogg|flac|aif|aiff|m4a|opus|webm)$/i;
+// The renderer may only touch the kinds of files LoopForge actually uses.
+const READABLE = /\.(wav|mp3|ogg|flac|aif|aiff|m4a|opus|webm|lfproj|mid|midi|json)$/i;
+const WRITABLE = /\.(lfproj|wav|mid|midi)$/i;
 
 ipcMain.handle('dlg:open', async (_e, opts = {}) => {
   const r = await dialog.showOpenDialog(win, {
@@ -109,6 +112,7 @@ ipcMain.handle('dlg:save', async (_e, opts = {}) => {
 });
 
 ipcMain.handle('fs:write', async (_e, p, data) => {
+  if (typeof p !== 'string' || !path.isAbsolute(p) || !WRITABLE.test(p)) return false;
   try {
     fs.writeFileSync(p, typeof data === 'string' ? data : Buffer.from(data));
     return true;
@@ -117,7 +121,10 @@ ipcMain.handle('fs:write', async (_e, p, data) => {
   }
 });
 
-ipcMain.handle('fs:read', async (_e, p) => new Uint8Array(fs.readFileSync(p)));
+ipcMain.handle('fs:read', async (_e, p) => {
+  if (typeof p !== 'string' || !path.isAbsolute(p) || !READABLE.test(p)) throw new Error('Access denied');
+  return new Uint8Array(fs.readFileSync(p));
+});
 
 ipcMain.handle('dlg:folder', async () => {
   const r = await dialog.showOpenDialog(win, { properties: ['openDirectory'] });
@@ -125,6 +132,7 @@ ipcMain.handle('dlg:folder', async () => {
 });
 
 ipcMain.handle('fs:listAudio', async (_e, dir) => {
+  if (typeof dir !== 'string' || !path.isAbsolute(dir)) return [];
   const out = [];
   const walk = (d, depth) => {
     if (depth > 6 || out.length > 5000) return;

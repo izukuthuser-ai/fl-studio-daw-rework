@@ -40,7 +40,8 @@ export class Engine extends Emitter<EngineEvents> {
   private timer: any = null;
   private autoInit = new Set<string>();
   private held = new Map<string, Held>();
-  private takeStarted = false;
+  private takeIds = new Set<string>();
+  private takeGroup = 'take0';
   private meterBuf = new Float32Array(512);
   peakHold: number[][] = [];
 
@@ -53,12 +54,20 @@ export class Engine extends Emitter<EngineEvents> {
     this.graph = new AudioGraph(this.ctx, samples, true);
     this.graph.sync(store.project);
     this.graph.setMonitorVolume(store.ui.masterVol);
+    this.curBpm = store.project.bpm;
     this.ready = true;
-    store.on('project', (label) => {
+    store.on('project', () => {
       this.graph.sync(store.project);
-      if (label === 'tempo' && this.playing) this.reposition(this.position);
+      const bpm = store.project.bpm;
+      if (bpm !== this.curBpm) {
+        // position must be computed with the tempo the current anchors were laid with
+        const pos = this.playing ? this.position : 0;
+        this.curBpm = bpm;
+        if (this.playing) this.reposition(pos);
+      }
     });
     store.on('loaded', () => {
+      this.curBpm = store.project.bpm;
       this.stop();
       this.graph.sync(store.project);
     });
@@ -76,8 +85,10 @@ export class Engine extends Emitter<EngineEvents> {
     window.addEventListener('keydown', resume, true);
   }
 
+  private curBpm = 140;
+  /** Seconds per tick of the tempo currently being played. */
   get spt() {
-    return secPerTick(store.project.bpm);
+    return secPerTick(this.curBpm || store.project.bpm);
   }
 
   private range(): { start: number; end: number } {
@@ -115,11 +126,12 @@ export class Engine extends Emitter<EngineEvents> {
     else this.play();
   }
 
-  play() {
+  play(fromInput = false) {
     if (!this.ready) this.init();
     if (this.ctx.state !== 'running') this.ctx.resume();
     const ui = store.ui;
-    if (ui.recording && ui.waitInput && !this.waitingForInput) {
+    this.curBpm = store.project.bpm;
+    if (ui.recording && ui.waitInput && !this.waitingForInput && !fromInput) {
       this.waitingForInput = true;
       this.emit('state', null);
       return;
@@ -142,7 +154,8 @@ export class Engine extends Emitter<EngineEvents> {
     this.nextTime = time0;
     this.nextPos = pos;
     this.autoInit.clear();
-    this.takeStarted = false;
+    this.takeIds.clear();
+    this.takeGroup = 'take' + Date.now();
     if (this.mode === 'song') startMidClips(this.graph, store.project, pos, time0, this.spt);
     this.playing = true;
     this.paused = false;
@@ -179,10 +192,13 @@ export class Engine extends Emitter<EngineEvents> {
   }
 
   /** Move the song position marker (and the playhead if playing). */
-  setPosition(tick: number) {
+  setPosition(tick: number, scope?: 'song' | 'pattern') {
     tick = Math.max(0, Math.round(tick));
-    if (store.ui.songMode) this.songStart = tick;
-    else this.patStart = tick;
+    scope = scope ?? (store.ui.focused === 'playlist' || store.ui.songMode ? 'song' : 'pattern');
+    if (scope === 'song') {
+      this.songStart = tick;
+      if (!store.ui.songMode) store.setUI({ songMode: true });
+    } else this.patStart = tick;
     this.stepPos = tick;
     if (this.paused) this.pausePos = tick;
     if (this.playing) {
@@ -231,6 +247,7 @@ export class Engine extends Emitter<EngineEvents> {
         this.nextPos = r.start;
         this.anchors.push({ time: this.nextTime, pos: r.start });
         this.autoInit.clear();
+        if (this.mode === 'song' && r.start > 0) startMidClips(this.graph, p, r.start, this.nextTime, this.spt);
       }
     }
     // trim anchors
@@ -251,7 +268,9 @@ export class Engine extends Emitter<EngineEvents> {
 
   // ---------------- live input ----------------
   private targetChannel(channelId?: ID): Channel | undefined {
-    return store.channel(channelId) ?? store.selectedChannel;
+    if (channelId) return store.channel(channelId) ?? store.selectedChannel;
+    if (store.ui.focused === 'pianoroll') return store.pianoChannel;
+    return store.selectedChannel;
   }
 
   noteOn(key: number, vel = 0.78, channelId?: ID, holdId?: string) {
@@ -263,7 +282,7 @@ export class Engine extends Emitter<EngineEvents> {
     if (this.held.has(id)) return;
     if (this.waitingForInput) {
       this.waitingForInput = false;
-      this.play();
+      this.play(true);
     }
     const voice = this.graph.noteOn(ch, key, vel, 0, this.ctx.currentTime, null);
     const ui = store.ui;
@@ -304,18 +323,20 @@ export class Engine extends Emitter<EngineEvents> {
     const pat = store.currentPattern;
     const start = h.recStart;
     const blend = store.ui.blend;
-    store.commit('Record notes', (p) => {
+    store.commitGrouped('Record notes', this.takeGroup, (p) => {
       const pt = p.patterns.find((x) => x.id === pat.id);
       if (!pt) return;
       const arr = (pt.notes[h.channelId] ??= []);
-      if (!blend && !this.takeStarted) {
-        // overwrite mode: remove overlapping notes on the same key region
+      if (!blend) {
+        // overwrite mode: replace older notes in the recorded range (never notes from this take)
         for (let i = arr.length - 1; i >= 0; i--) {
           const n = arr[i];
-          if (n.start >= start && n.start < start + lenTicks) arr.splice(i, 1);
+          if (!this.takeIds.has(n.id) && n.start >= start && n.start < start + lenTicks) arr.splice(i, 1);
         }
       }
-      arr.push({ id: uid('n'), key: h.key, start, len: lenTicks, vel: h.vel, pan: 0 });
+      const id = uid('n');
+      this.takeIds.add(id);
+      arr.push({ id, key: h.key, start, len: lenTicks, vel: h.vel, pan: 0 });
     });
     this.emit('recorded', null);
   }

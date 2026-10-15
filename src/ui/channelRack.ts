@@ -1040,7 +1040,7 @@ function registerRackCommands(api: { ensureRowVisible: (id: ID) => void }) {
     c('cr.nextGroup', 'Next channel group', ['PageUp'], () => cycleGroup(1)),
     c('cr.prevGroup', 'Previous channel group', ['PageDown'], () => cycleGroup(-1)),
     c('cr.rename', 'Rename selected channel…', ['F2'], () => renameChannel(store.ui.selectedChannels[0])),
-    c('cr.settings', 'Open channel settings', ['Enter'], () => {
+    c('cr.settings', 'Open channel settings', [], () => {
       const id = store.ui.selectedChannels[0];
       if (id) openSettings(id);
     }),

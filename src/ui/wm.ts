@@ -25,6 +25,8 @@ export class Win {
   titleEl: HTMLElement;
   visible = false;
   maximized = false;
+  /** The size/position the user chose; keepInside() fits this into the workspace without overwriting it. */
+  wantRect: { x: number; y: number; w: number; h: number } | null = null;
   private prevRect: { x: number; y: number; w: number; h: number } | null = null;
 
   constructor(public spec: WinSpec, private wm: WindowManager) {
@@ -45,7 +47,17 @@ export class Win {
       this.focus();
       if (this.maximized) return;
       const r = this.rect();
-      drag(e, (dx, dy) => this.setRect({ ...r, x: r.x + dx, y: Math.max(0, r.y + dy) }), () => wm.saveLayout());
+      drag(
+        e,
+        (dx, dy) => {
+          const ws = wm.workspace.getBoundingClientRect();
+          // keep at least part of the title bar reachable
+          const x = Math.max(-(r.w - 90), Math.min(ws.width - 90, r.x + dx));
+          const y = Math.max(0, Math.min(ws.height - 28, r.y + dy));
+          this.setRect({ ...r, x, y });
+        },
+        () => wm.saveLayout(),
+      );
     });
     this.header.addEventListener('dblclick', (e) => {
       if ((e.target as HTMLElement).closest('button,input,select,.win-extra')) return;
@@ -65,7 +77,8 @@ export class Win {
     };
   }
 
-  setRect(r: { x: number; y: number; w: number; h: number }) {
+  setRect(r: { x: number; y: number; w: number; h: number }, user = true) {
+    if (user && !this.maximized) this.wantRect = { ...r };
     const min = this.spec.min ?? { w: 240, h: 140 };
     this.root.style.left = Math.round(r.x) + 'px';
     this.root.style.top = Math.round(r.y) + 'px';
@@ -102,11 +115,11 @@ export class Win {
       this.root.classList.remove('maximized');
       if (this.prevRect) this.setRect(this.prevRect);
     } else {
-      this.prevRect = this.rect();
+      this.prevRect = this.wantRect ?? this.rect();
       this.maximized = true;
       this.root.classList.add('maximized');
       const ws = this.wm.workspace.getBoundingClientRect();
-      this.setRect({ x: 0, y: 0, w: ws.width, h: ws.height });
+      this.setRect({ x: 0, y: 0, w: ws.width, h: ws.height }, false);
     }
     this.spec.onResize?.();
     this.wm.saveLayout();
@@ -142,15 +155,16 @@ export class Win {
   keepInside() {
     const ws = this.wm.workspace.getBoundingClientRect();
     if (this.maximized) {
-      this.setRect({ x: 0, y: 0, w: ws.width, h: ws.height });
+      this.setRect({ x: 0, y: 0, w: ws.width, h: ws.height }, false);
       return;
     }
+    const want = this.wantRect ?? this.rect();
+    const x = Math.max(0, Math.min(want.x, ws.width - 120));
+    const y = Math.max(0, Math.min(want.y, ws.height - 30));
+    const w = Math.min(want.w, Math.max(120, ws.width - x));
+    const h = Math.min(want.h, Math.max(60, ws.height - y));
     const r = this.rect();
-    const w = Math.min(r.w, ws.width);
-    const h = Math.min(r.h, ws.height);
-    const x = Math.max(0, Math.min(r.x, ws.width - Math.min(w, 120)));
-    const y = Math.max(0, Math.min(r.y, ws.height - 30));
-    if (x !== r.x || y !== r.y || w !== r.w || h !== r.h) this.setRect({ x, y, w, h });
+    if (x !== r.x || y !== r.y || w !== r.w || h !== r.h) this.setRect({ x, y, w, h }, false);
   }
 
   setTitle(t: string) {
@@ -237,22 +251,25 @@ export class WindowManager {
   /** Tile visible windows in a sensible FL-like layout. */
   arrange() {
     const ws = this.workspace.getBoundingClientRect();
-    const W = ws.width, H = ws.height;
+    const br = this.wins.get('browser');
+    const BX = br?.visible && !br.maximized ? Math.round(br.rect().w) : 0;
+    if (br?.visible) br.setRect({ x: 0, y: 0, w: br.rect().w, h: ws.height });
+    const W = ws.width - BX, H = ws.height;
     const pl = this.wins.get('playlist');
     const cr = this.wins.get('channelrack');
     const pr = this.wins.get('pianoroll');
     const mx = this.wins.get('mixer');
     for (const w of [pl, cr, pr, mx]) if (w?.maximized) w.toggleMax();
-    pl?.setRect({ x: 0, y: 0, w: W, h: H });
-    if (cr?.visible) cr.setRect({ x: 12, y: 12, w: Math.min(760, W * 0.55), h: Math.min(360, H * 0.48) });
-    if (pr?.visible) pr.setRect({ x: Math.round(W * 0.18), y: Math.round(H * 0.08), w: Math.round(W * 0.8), h: Math.round(H * 0.6) });
-    if (mx?.visible) mx.setRect({ x: Math.round(W * 0.06), y: Math.round(H * 0.42), w: Math.round(W * 0.9), h: Math.round(H * 0.56) });
+    pl?.setRect({ x: BX, y: 0, w: W, h: H });
+    if (cr?.visible) cr.setRect({ x: BX + 12, y: 12, w: Math.min(820, W * 0.6), h: Math.min(360, H * 0.48) });
+    if (pr?.visible) pr.setRect({ x: BX + Math.round(W * 0.12), y: Math.round(H * 0.08), w: Math.round(W * 0.86), h: Math.round(H * 0.6) });
+    if (mx?.visible) mx.setRect({ x: BX + Math.round(W * 0.03), y: Math.round(H * 0.4), w: Math.round(W * 0.95), h: Math.round(H * 0.58) });
     this.saveLayout();
   }
 
   saveLayout() {
     const o: Record<string, any> = {};
-    for (const [id, w] of this.wins) o[id] = { ...w.rect(), visible: w.visible, max: w.maximized };
+    for (const [id, w] of this.wins) o[id] = { ...(w.wantRect ?? w.rect()), visible: w.visible, max: w.maximized };
     try {
       localStorage.setItem('lf.layout', JSON.stringify(o));
     } catch {}

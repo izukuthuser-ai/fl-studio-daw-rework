@@ -36,7 +36,9 @@ export function deleteChannels(ids: ID[]) {
     p.channels = p.channels.filter((c) => !ids.includes(c.id));
     for (const pt of p.patterns) for (const id of ids) delete pt.notes[id];
     p.playlist.clips = p.playlist.clips.filter((c) => !(c.kind === 'audio' && ids.includes(c.ref)));
-    p.automations = p.automations.filter((a) => !(a.target.scope === 'channel' && ids.includes(a.target.id)));
+    const gone = new Set(p.automations.filter((a) => a.target.scope === 'channel' && ids.includes(a.target.id)).map((a) => a.id));
+    p.automations = p.automations.filter((a) => !gone.has(a.id));
+    p.playlist.clips = p.playlist.clips.filter((c) => !(c.kind === 'automation' && gone.has(c.ref)));
   });
   store.validateUI();
   store.emit('ui', ['selectedChannels']);

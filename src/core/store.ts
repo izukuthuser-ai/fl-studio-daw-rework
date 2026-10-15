@@ -114,6 +114,37 @@ export class Store extends Emitter<StoreEvents> {
     this.notify(label);
   }
 
+  private lastGroup: string | null = null;
+  private lastGroupSnap: Snapshot | null = null;
+  private deferred: (() => void)[] = [];
+
+  /**
+   * Undoable change that merges with the previous change of the same group, as long as
+   * nothing else was committed in between (used for a recording take: one undo step,
+   * but a mute or knob tweak during the take stays its own step).
+   */
+  commitGrouped(label: string, group: string, fn: (p: Project) => void) {
+    if (this.liveBase) {
+      // a drag is in progress — apply after it ends so it doesn't swallow this change
+      this.deferred.push(() => this.commitGrouped(label, group, fn));
+      return;
+    }
+    const top = this.undoStack[this.undoStack.length - 1];
+    if (this.lastGroup === group && top && top === this.lastGroupSnap) {
+      fn(this.project);
+      this.redoStack = [];
+      this.notify(label);
+      return;
+    }
+    const before = this.snap(label);
+    fn(this.project);
+    if (before.json === JSON.stringify(this.project)) return;
+    this.pushUndo(before);
+    this.lastGroup = group;
+    this.lastGroupSnap = before;
+    this.notify(label);
+  }
+
   /** Start a continuous edit (drag). Changes made via live() are merged into one undo step on end(). */
   begin(label: string) {
     if (this.liveBase) this.end();
@@ -131,12 +162,17 @@ export class Store extends Emitter<StoreEvents> {
       this.pushUndo(base);
       this.emit('history', null);
     }
+    const d = this.deferred;
+    this.deferred = [];
+    for (const f of d) f();
   }
   get editing() {
     return !!this.liveBase;
   }
 
   private pushUndo(s: Snapshot) {
+    this.lastGroup = null;
+    this.lastGroupSnap = null;
     this.undoStack.push(s);
     if (this.undoStack.length > 300) this.undoStack.shift();
     this.redoStack = [];
@@ -218,6 +254,14 @@ export class Store extends Emitter<StoreEvents> {
     if (this.ui.pianoRollChannel && !p.channels.some((c) => c.id === this.ui.pianoRollChannel))
       this.ui.pianoRollChannel = this.ui.selectedChannels[0] ?? null;
     if (this.ui.selectedMixer >= p.mixer.length) this.ui.selectedMixer = 0;
+    const src = this.ui.plSource;
+    if (src) {
+      const ok =
+        src.kind === 'pattern' ? p.patterns.some((x) => x.id === src.ref) : src.kind === 'audio' ? p.channels.some((c) => c.id === src.ref) : p.automations.some((a) => a.id === src.ref);
+      if (!ok) this.ui.plSource = p.patterns[0] ? { kind: 'pattern', ref: p.patterns[0].id } : null;
+    }
+    if (this.ui.editAutomation && !p.automations.some((a) => a.id === this.ui.editAutomation)) this.ui.editAutomation = null;
+    if (this.ui.settingsChannel && !p.channels.some((c) => c.id === this.ui.settingsChannel)) this.ui.settingsChannel = null;
   }
 
   // ---------- queries ----------

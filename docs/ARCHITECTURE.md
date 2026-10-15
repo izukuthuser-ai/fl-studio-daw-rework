@@ -1,4 +1,4 @@
-# Engineering brief (shared by all window implementers)
+# Architecture & contributor guide
 
 LoopForge Studio is an Electron + TypeScript + Vite DAW that recreates FL Studio's workflow and keyboard shortcuts with original visuals (never use FL Studio branding, logos or plugin names). Spec: `PROMPT.md`.
 
@@ -26,14 +26,13 @@ LoopForge Studio is an Electron + TypeScript + Vite DAW that recreates FL Studio
 - `src/ui/mixer.ts` is a finished example of a window built on these APIs — read it for conventions (structure signature + in-place updates, hint text, menus, commands).
 
 ## Rules
-1. Only create/edit the files you are assigned (plus new helper files with your module's prefix). Never edit shared files; if you need a shared change, describe it precisely in your final report. Other engineers are editing other windows right now — ignore TypeScript errors that come only from their files.
+1. Keep each window's code in its own module (plus helpers with the module's prefix); shared behaviour belongs in `core/`, `audio/` or `ui/ops.ts`.
 2. Canvas editors: support HiDPI (`devicePixelRatio`), redraw via `requestAnimationFrame` only when dirty, draw the playhead without redrawing everything if possible, and virtualize (only draw what's visible).
 3. Don't rebuild DOM on every project change; rebuild structure only when a structural signature changes, otherwise update in place. Elements being dragged must survive updates.
 4. Every user edit must be undoable (commit / begin-live-end). Never mutate `store.project` outside those.
 5. Make it look polished and modern, consistent with the existing dark theme; original visuals.
 
-## Verify before finishing
-- `cd /home/claude/izukuthuser-ai/fl-studio-daw-rework && npx tsc --noEmit` — no errors in your files.
-- Build to a private dir (never the default `dist/`): `npx vite build --outDir /tmp/claude-0/-home-claude/3f7a8a70-617c-5945-976a-9461d30834a8/scratchpad/<yourname>-dist --emptyOutDir`.
-- Screenshot + drive the UI: `cd /tmp/claude-0/-home-claude/3f7a8a70-617c-5945-976a-9461d30834a8/scratchpad/harness && node shot.mjs <distDir> <out.png> [actions.mjs]` — `actions.mjs` is `export default async (page) => { … }`; in the page `window.__lf` = `{ store, engine, wm, hooks }`. Use real mouse/keyboard (`page.mouse`, `page.keyboard`) to test interactions, read state back with `page.evaluate`. The harness prints console errors; there must be none from your code (a favicon 404 is fine). Look at screenshots with the Read tool and iterate until it looks right.
-- Final report (short): what you built, how you tested it, any shared-file changes you need, known gaps.
+## Testing
+- `npx tsc --noEmit` must be clean.
+- `npm run web` runs the full app in a browser; `window.__lf` exposes `{ store, engine, wm, hooks, renderProject }` for scripted UI tests (e.g. with Playwright).
+- Exports can be checked headlessly with `renderProject(store.project, { mode: 'song', patternId, sampleRate: 44100, tail: 2 })`.

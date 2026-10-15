@@ -456,11 +456,12 @@ export function select<T extends string | number>(options: { value: T; label: st
 }
 
 /** Numeric drag-field (like FL's tempo display): drag up/down, wheel, double-click to type. */
-export function dragNumber(o: { get: () => number; set: (v: number) => void; min: number; max: number; step: number; fmt?: (v: number) => string; hint: string; cls?: string; begin?: () => void; end?: () => void; pxPerStep?: number }): KnobEl {
+export function dragNumber(o: { get: () => number; set: (v: number) => void; min: number; max: number; step: number; precision?: number; fmt?: (v: number) => string; hint: string; cls?: string; begin?: () => void; end?: () => void; pxPerStep?: number }): KnobEl {
   const e = el('div', { class: 'dragnum ' + (o.cls ?? ''), 'data-hint': o.hint }) as unknown as KnobEl;
   e.update = () => (e.textContent = o.fmt ? o.fmt(o.get()) : String(o.get()));
   const setv = (v: number) => {
-    o.set(clamp(Math.round(v / o.step) * o.step, o.min, o.max));
+    const q = o.precision ?? o.step;
+    o.set(clamp(Math.round(v / q) * q, o.min, o.max));
     e.update();
   };
   e.addEventListener('pointerdown', (ev) => {

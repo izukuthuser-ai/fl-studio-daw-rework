@@ -55,7 +55,10 @@ export function comboFromEvent(e: KeyboardEvent): string {
 
 /** Normalise a user-written combo ("shift+ctrl+a") into canonical order. */
 export function normCombo(c: string): string {
-  const parts = c.split('+').map((s) => s.trim()).filter(Boolean);
+  // a trailing '+' is the key itself (e.g. "Num+", "Ctrl+Num+")
+  const plusKey = c.endsWith('+');
+  const parts = (plusKey ? c.slice(0, -1) : c).split('+').map((s) => s.trim()).filter(Boolean);
+  if (plusKey) parts[parts.length - 1] = (parts[parts.length - 1] ?? '') + '+';
   const mods = new Set(parts.slice(0, -1).map((m) => m.toLowerCase()));
   let key = parts[parts.length - 1] ?? '';
   if (key.length === 1) key = key.toUpperCase();
@@ -74,7 +77,7 @@ export function displayCombo(c: string): string {
 
 /** True when combo has no Ctrl/Alt modifier (disabled while typing-keyboard-to-piano is on). */
 export function isSingleKey(c: string) {
-  return !c.includes('Ctrl+') && !c.includes('Alt+') && !/^F\d/.test(c.replace('Shift+', '')) && !['Space', 'Esc', 'Enter', 'Tab'].includes(c);
+  return /^(Shift\+)?([A-Z0-9]|[-=\[\];',./\\`])$/.test(c);
 }
 
 class Commands extends Emitter<{ changed: null }> {

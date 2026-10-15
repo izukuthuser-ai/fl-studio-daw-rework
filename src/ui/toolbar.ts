@@ -153,6 +153,7 @@ export function createToolbar(): HTMLElement {
     min: 10,
     max: 522,
     step: 1,
+    precision: 0.001,
     fmt: (v) => v.toFixed(3),
     hint: 'Tempo (BPM) — drag, scroll or double-click to type',
     cls: 'tb-tempo',

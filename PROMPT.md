@@ -63,7 +63,7 @@ Menus: FILE, EDIT, ADD, PATTERNS, VIEW, OPTIONS, HELP. Transport: PAT/SONG toggl
 ### 5. Mixer (F9)
 - Master + inserts (default 16, add more with "+", no 125 limit). Strip: name, stereo peak meter with peak-hold, dB fader (−∞…+5.6 dB), pan, mute LED, solo, record-arm placeholder, routing arrow.
 - Selected track panel: 10 FX slots (add/replace/remove/bypass/reorder, dry-wet per slot), "Route to" selector (any track except one that would form a loop), stereo width.
-- Built-in effects (original designs): Parametric EQ (4 band + low/high cut), Compressor, Limiter, Reverb (algorithmic, generated IR), Delay (tempo-synced, ping-pong), Filter (LP/HP/BP + LFO), Distortion (soft/hard/fold), Bitcrusher, Chorus, Stereo Width, Gate.
+- Built-in effects (original designs): Parametric EQ (4 band + low/high cut), Compressor, Limiter, Reverb (algorithmic, generated IR), Delay (tempo-synced, ping-pong), Filter (LP/HP/BP + LFO), Distortion (soft/hard/fold), Bitcrusher, Chorus, Stereo Width.
 - Channel → mixer routing via the channel's track number or `Ctrl+L`.
 
 ### 6. Browser (Alt+F8)
@@ -130,7 +130,7 @@ Shortcuts are context-sensitive: the focused window's map is checked first, then
 ### Patterns
 | Key | Action |
 |---|---|
-| 1–9 | Select pattern 1–9 (when Channel Rack is not focused) |
+| 1–9 | Select pattern 1–9 (creates it if unused; when Channel Rack is not focused) |
 | Numpad + / − | Next / previous pattern |
 | F2 | Rename pattern (Mixer focused: rename track) |
 | F4 | Next empty pattern (with name dialog) |
@@ -217,7 +217,7 @@ Shortcuts are context-sensitive: the focused window's map is checked first, then
 | F2 | Rename track |
 
 ### Typing keyboard to piano (when Ctrl+T is on)
-Lower octave: `Z S X D C V G B H N J M , L . ; /` · Upper octave: `Q 2 W 3 E R 5 T 6 Y 7 U I 9 O 0 P [ = ]` · Octave down/up: Alt+numpad, or `-`/`=` in this mode.
+Lower octave: `Z S X D C V G B H N J M , L . ; /` · Upper octave: `Q 2 W 3 E R 5 T 6 Y 7 U I 9 O 0 P [ = ]` · Octave: Alt+Num2…Num6, or drag the OCT display in the toolbar. Notes go to the Piano roll's channel when the Piano roll is focused, otherwise to the selected channel. Only single printable keys are disabled in this mode — arrows, Del, Home, PgUp/PgDn etc. keep working.
 
 ## "Just better" — improvements over FL Studio
 
@@ -243,12 +243,12 @@ Lower octave: `Z S X D C V G B H N J M , L . ; /` · Upper octave: `Q 2 W 3 E R 
 - Export: WAV 16/24/32-float, 44.1/48 kHz, song or pattern, with tail; MIDI export (SMF type 1).
 
 ## Project file (`.lfproj`)
-JSON: `{ format: "loopforge", version, name, bpm, timeSig, swing, channels[], patterns[], playlist{tracks[], clips[]}, mixer[], automation[], settings }`. Samples referenced by path or embedded as base64 when "embed samples" is on.
+JSON: `{ format: "loopforge", version, info{title,author,genre,comments}, bpm, timeSig, swing, masterPitch, channels[], patterns[], playlist{tracks[], clips[]}, automations[], mixer[], embedded? }`. Samples are referenced by path, or embedded as base64 (`embedded`) when "Save as (embed samples)" is used.
 
 ## Acceptance criteria
 
 1. `npm run dev` opens the app; `npm run dist:win` produces `LoopForge Studio <version>.exe` (installer) and a portable `.exe`.
-2. A new project opens with a demo beat (kick/clap/hat/bass) in pattern 1 that plays on Space.
+2. The app opens with a demo song: pattern 1 is a drum beat that plays on Space; patterns 2–4 hold the 808, melody and chords, arranged in the Playlist (L then Space plays the song).
 3. Every shortcut in the tables above performs its action in the right context.
 4. Draw notes in the Piano Roll, place the pattern in the Playlist, switch to Song mode (L), press Space → it plays.
 5. Mixer FX audibly change the sound; meters move; mute/solo work.
