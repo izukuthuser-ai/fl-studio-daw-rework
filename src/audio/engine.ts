@@ -31,6 +31,7 @@ export class Engine extends Emitter<EngineEvents> {
   waitingForInput = false;
   mode: 'pattern' | 'song' = 'pattern';
   songStart = 0; // song position marker (ticks)
+  patStart = 0; // pattern-mode start position (ticks)
   stepPos = 0; // step-edit cursor
   private pausePos = 0;
   private anchors: { time: number; pos: number }[] = [];
@@ -89,7 +90,7 @@ export class Engine extends Emitter<EngineEvents> {
   /** Current playback position in ticks. */
   get position(): number {
     if (!this.ready) return 0;
-    if (!this.playing) return this.paused ? this.pausePos : this.mode === 'song' || store.ui.songMode ? this.songStart : 0;
+    if (!this.playing) return this.paused ? this.pausePos : store.ui.songMode ? this.songStart : this.patStart % patternLen(store.currentPattern, store.project.timeSig);
     const now = this.ctx.currentTime;
     let a = this.anchors[0];
     for (const x of this.anchors) if (x.time <= now) a = x;
@@ -126,7 +127,8 @@ export class Engine extends Emitter<EngineEvents> {
     this.waitingForInput = false;
     this.mode = ui.songMode ? 'song' : 'pattern';
     const r = this.range();
-    let pos = this.paused ? this.pausePos : this.mode === 'song' ? this.songStart : 0;
+    let pos = this.paused ? this.pausePos : this.mode === 'song' ? this.songStart : this.patStart;
+    if (this.mode === 'pattern' && r.end > 0) pos = pos % r.end;
     if (pos < r.start || pos >= r.end) pos = r.start;
     let time0 = this.ctx.currentTime + 0.06;
     if (ui.recording && ui.precount) {
@@ -179,7 +181,8 @@ export class Engine extends Emitter<EngineEvents> {
   /** Move the song position marker (and the playhead if playing). */
   setPosition(tick: number) {
     tick = Math.max(0, Math.round(tick));
-    this.songStart = tick;
+    if (store.ui.songMode) this.songStart = tick;
+    else this.patStart = tick;
     this.stepPos = tick;
     if (this.paused) this.pausePos = tick;
     if (this.playing) {
@@ -233,6 +236,11 @@ export class Engine extends Emitter<EngineEvents> {
     // trim anchors
     const now = this.ctx.currentTime;
     while (this.anchors.length > 2 && this.anchors[1].time <= now) this.anchors.shift();
+  }
+
+  /** Notes currently held from the typing keyboard / MIDI / on-screen keys. */
+  heldKeys(): { channelId: ID; key: number }[] {
+    return [...this.held.values()].map((h) => ({ channelId: h.channelId, key: h.key }));
   }
 
   panic() {
@@ -357,8 +365,13 @@ export class Engine extends Emitter<EngineEvents> {
   }
 
   /** Peak levels per mixer strip, [L, R] in linear gain. */
+  private meterCache: number[][] = [];
+  private meterStamp = -1;
   readMeters(): number[][] {
     if (!this.ready) return [];
+    const now = performance.now();
+    if (now - this.meterStamp < 8) return this.meterCache;
+    this.meterStamp = now;
     const out: number[][] = [];
     for (const s of this.graph.stripOrder) {
       const lr: number[] = [];
@@ -373,6 +386,7 @@ export class Engine extends Emitter<EngineEvents> {
       }
       out.push(lr.length ? lr : [0, 0]);
     }
+    this.meterCache = out;
     return out;
   }
 

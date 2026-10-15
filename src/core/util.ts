@@ -20,7 +20,8 @@ export const midiToFreq = (m: number) => 440 * Math.pow(2, (m - 69) / 12);
 export const dbToGain = (db: number) => (db <= -60 ? 0 : Math.pow(10, db / 20));
 export const gainToDb = (g: number) => (g <= 0.001 ? -60 : 20 * Math.log10(g));
 /** Channel volume knob (0..1.25, 0.8 = unity) to gain */
-export const chanVolToGain = (v: number) => Math.pow(v / 0.8, 2);
+/** FL-like curve: 100% = 0 dB, default 78% ≈ -4.3 dB, 125% ≈ +3.9 dB */
+export const chanVolToGain = (v: number) => v * v;
 
 export function fmtDb(db: number): string {
   if (db <= -60) return '-inf dB';
@@ -104,8 +105,8 @@ export function fmtTime(sec: number) {
 }
 
 export const PALETTE = [
-  '#e8634a', '#f0a03c', '#e8d24a', '#8fd14f', '#3fc98a', '#3cc6c4', '#4aa3e8', '#6b7bf0',
-  '#a06bf0', '#d86bd8', '#f06b9a', '#9aa7b0', '#c9844a', '#6fb58a', '#5f8fc4', '#b78ad8',
+  '#c95f4f', '#cf8846', '#c9ae4b', '#86b358', '#51ad80', '#4aa8a7', '#5a92c4', '#6e78c6',
+  '#9470c2', '#b866b3', '#c96687', '#8a979f', '#a97e55', '#6a9e7c', '#5d82a8', '#a184bb',
 ];
 export function paletteColor(i: number) {
   return PALETTE[((i % PALETTE.length) + PALETTE.length) % PALETTE.length];

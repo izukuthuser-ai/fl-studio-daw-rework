@@ -2,7 +2,7 @@
 import { commands, comboFromEvent, isSingleKey, KeyCtx } from '../core/commands';
 import { store } from '../core/store';
 import { engine } from '../audio/engine';
-import { isDialogOpen, closeMenus, toast } from './widgets';
+import { isDialogOpen, closeMenus, menusOpen, toast } from './widgets';
 
 // FL layout: lower row starts one octave below the upper row.
 const LOWER: Record<string, number> = {
@@ -57,7 +57,11 @@ export function initKeys() {
         if (e.key === 'Escape') (e.target as HTMLElement).blur();
         return;
       }
-      if (e.key === 'Escape') closeMenus();
+      if (e.key === 'Escape' && menusOpen()) {
+        e.preventDefault();
+        closeMenus();
+        return;
+      }
       const combo = comboFromEvent(e);
       // typing keyboard to piano
       if (store.ui.typingPiano && !e.ctrlKey && !e.altKey && !e.metaKey) {

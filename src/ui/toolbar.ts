@@ -120,7 +120,13 @@ export function createToolbar(): HTMLElement {
   store.on('loaded', updProj);
   store.on('project', updProj);
 
-  const row1 = el('div', { class: 'tb-row1' }, el('div', { class: 'tb-logo', html: ICONS.logo, 'data-hint': 'LoopForge Studio' }), menubar, hint, projName);
+  // FL layout: main menu stacked above the hint bar on the far left
+  const leftBlock = el(
+    'div',
+    { class: 'tb-left' },
+    el('div', { class: 'tb-menurow' }, el('div', { class: 'tb-logo', html: ICONS.logo, 'data-hint': 'LoopForge Studio' }), menubar, projName),
+    hint,
+  );
 
   // ---- transport ----
   const patBtn = el('button', { class: 'tb-mode', text: 'PAT', 'data-hint': 'Pattern mode — play the current pattern (L)' });
@@ -202,7 +208,7 @@ export function createToolbar(): HTMLElement {
     def: { key: 'mv', label: 'Master volume', min: 0, max: 1.25, def: 0.8, fmt: (v) => Math.round(v * 100) + '%' },
     get: () => store.ui.masterVol,
     set: (v) => store.setUI({ masterVol: v }),
-    size: 26,
+    size: 22,
   });
   let pitchBegin = false;
   const masterPitch = knob({
@@ -211,10 +217,10 @@ export function createToolbar(): HTMLElement {
     set: (v) => store.live((p) => (p.masterPitch = Math.round(v * 100) / 100)),
     begin: () => { pitchBegin = true; store.begin('Master pitch'); },
     end: () => { if (pitchBegin) store.end(); pitchBegin = false; },
-    size: 26,
+    size: 22,
     bipolar: true,
   });
-  const scope = el('canvas', { class: 'tb-scope', width: 120, height: 34, 'data-hint': 'Master output — waveform & peak level' }) as HTMLCanvasElement;
+  const scope = el('canvas', { class: 'tb-scope', width: 128, height: 40, 'data-hint': 'Master output — waveform & peak level' }) as HTMLCanvasElement;
   const voices = el('div', { class: 'tb-voices', 'data-hint': 'Active voices (polyphony)' });
 
   const winBtn = (icon: string, id: string, cmd: string) => {
@@ -238,22 +244,21 @@ export function createToolbar(): HTMLElement {
   };
   wm.onChange(updWin);
 
+  const panel = (cls: string, ...kids: (HTMLElement | null)[]) => el('div', { class: 'tb-panel ' + cls }, ...kids);
+  const recGrid = el('div', { class: 'tb-recgrid' }, ...toggles);
   const row2 = el(
     'div',
-    { class: 'tb-row2' },
-    modeBox,
-    el('div', { class: 'tb-group' }, playBtn, stopBtn, recBtn),
+    { class: 'tb-main' },
+    panel('tb-masters', el('div', { class: 'tb-mknob' }, masterVol, el('span', { text: 'VOL' })), el('div', { class: 'tb-mknob' }, masterPitch, el('span', { text: 'PITCH' }))),
+    panel('tb-transport', modeBox, playBtn, stopBtn, recBtn),
     tempoBox,
     timeBox,
-    el('div', { class: 'tb-group pat-group' }, patSel, patAdd),
-    el('div', { class: 'tb-group' }, ...toggles, octave),
-    el('div', { class: 'tb-group' }, el('span', { class: 'tb-icon', html: ICONS.magnet }), snapSel),
-    el('div', { class: 'tb-group knobs' }, masterVol, masterPitch),
-    scope,
-    voices,
+    panel('tb-rec', recGrid, octave),
+    panel('tb-patsnap', el('div', { class: 'tb-patrow' }, patSel, patAdd), el('div', { class: 'tb-snaprow' }, el('span', { class: 'tb-icon', html: ICONS.magnet }), snapSel)),
+    panel('tb-wins', ...winBtns),
     el('div', { class: 'tb-spacer' }),
-    el('div', { class: 'tb-group' }, iconBtn(ICONS.undo, 'Undo (Ctrl+Z)', () => commands.run('edit.undo')), iconBtn(ICONS.redo, 'Redo (Ctrl+Shift+Z)', () => commands.run('edit.redo')), iconBtn(ICONS.history, 'Undo history', () => commands.run('edit.history')), iconBtn(ICONS.palette, 'Command palette (Ctrl+K)', () => commands.run('win.palette'))),
-    el('div', { class: 'tb-group' }, ...winBtns),
+    panel('tb-monitor', scope, voices),
+    panel('tb-edit', iconBtn(ICONS.undo, 'Undo (Ctrl+Z)', () => commands.run('edit.undo')), iconBtn(ICONS.redo, 'Redo (Ctrl+Shift+Z)', () => commands.run('edit.redo')), iconBtn(ICONS.history, 'Undo history', () => commands.run('edit.history')), iconBtn(ICONS.palette, 'Command palette (Ctrl+K)', () => commands.run('win.palette'))),
   );
 
   const updTransport = () => {
@@ -328,7 +333,7 @@ export function createToolbar(): HTMLElement {
   updTransport();
   updPat();
   updProj();
-  return el('div', { id: 'toolbar' }, row1, row2);
+  return el('div', { id: 'toolbar' }, leftBlock, row2);
 }
 
 export function attachToolbarShortcutsHelp() {

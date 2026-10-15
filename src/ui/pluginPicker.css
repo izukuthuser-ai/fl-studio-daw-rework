@@ -1,0 +1,83 @@
+/* ===================== Plugin picker (F8) ===================== */
+.pp-modal .modal-body { padding: 12px 14px 8px; }
+.pp { display: flex; flex-direction: column; gap: 10px; height: min(560px, calc(100vh - 190px)); }
+
+.pp-search {
+  flex: none; display: flex; align-items: center; gap: 8px; height: 36px; padding: 0 12px;
+  background: #2d3236; border: 1px solid var(--border); border-radius: 7px;
+  box-shadow: inset 0 1px 3px rgba(0, 0, 0, 0.45);
+  transition: border-color 0.12s, box-shadow 0.12s;
+}
+.pp-search:focus-within { border-color: var(--accent); box-shadow: inset 0 1px 3px rgba(0, 0, 0, 0.45), 0 0 0 3px rgba(246, 164, 50, 0.14); }
+.pp-search-ic { display: flex; color: var(--text-faint); }
+.pp-search-ic svg { width: 16px; height: 16px; }
+.pp-search:focus-within .pp-search-ic { color: var(--accent); }
+.pp-q { flex: 1; min-width: 0; height: 100%; border: none; outline: none; background: transparent; color: var(--text); font-size: 14px; padding: 0; user-select: text; }
+.pp-q::placeholder { color: var(--text-faint); }
+.pp-count { flex: none; font-size: 11px; color: var(--text-faint); font-variant-numeric: tabular-nums; }
+
+.pp-scroll { flex: 1; min-height: 0; overflow-y: auto; overflow-x: hidden; margin-right: -8px; padding-right: 8px; }
+
+.pp-sec { margin-bottom: 14px; }
+.pp-sec-h {
+  position: sticky; top: 0; z-index: 2; display: flex; align-items: baseline; gap: 7px;
+  padding: 4px 2px 6px; margin-bottom: 4px; background: var(--panel); border-bottom: 1px solid var(--border);
+}
+.pp-sec-t { font-size: 11px; font-weight: 700; letter-spacing: 0.09em; text-transform: uppercase; color: var(--text); }
+.pp-sec-n { font-size: 10.5px; color: var(--text-faint); background: var(--panel3); border-radius: 8px; padding: 0 6px; line-height: 15px; }
+.pp-sec-x { margin-left: auto; font-size: 11px; color: var(--text-dim); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.pp-grp { margin: 8px 2px 5px; font-size: 10.5px; color: var(--text-faint); letter-spacing: 0.03em; }
+
+.pp-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(164px, 1fr)); gap: 6px; }
+.pp-grid.wide { grid-template-columns: repeat(auto-fill, minmax(222px, 1fr)); }
+.pp-tile {
+  --c: var(--accent);
+  position: relative; display: flex; align-items: center; gap: 9px; min-width: 0;
+  padding: 6px 8px 6px 6px; border-radius: 7px; cursor: pointer;
+  background: linear-gradient(180deg, #515a5f, #495257);
+  border: 1px solid #383e42;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.035);
+  scroll-margin-top: 34px; scroll-margin-bottom: 6px;
+  transition: background 0.08s, border-color 0.08s;
+}
+.pp-tile:hover { background: linear-gradient(180deg, #5a6369, #515a5f); }
+.pp-tile.hl {
+  border-color: var(--accent);
+  background: linear-gradient(180deg, #535b5f, #4a5155);
+  box-shadow: 0 0 0 1px rgba(246, 164, 50, 0.35), inset 0 1px 0 rgba(255, 255, 255, 0.04);
+}
+.pp-tile[draggable='true']:active { cursor: grabbing; }
+.pp-ic {
+  width: 34px; height: 34px; flex: none; display: flex; align-items: center; justify-content: center;
+  border-radius: 8px; color: var(--c);
+  background: radial-gradient(120% 120% at 30% 20%, color-mix(in srgb, var(--c) 22%, #353b3e), color-mix(in srgb, var(--c) 8%, #2c3135));
+  border: 1px solid color-mix(in srgb, var(--c) 32%, transparent);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.05);
+}
+.pp-ic svg { width: 21px; height: 21px; }
+.pp-tx { flex: 1; min-width: 0; }
+.pp-name { font-weight: 600; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.pp-desc { font-size: 11px; color: var(--text-dim); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-top: 1px; }
+.pp-play {
+  position: absolute; right: 6px; top: 50%; transform: translateY(-50%);
+  width: 22px; height: 22px; display: none; align-items: center; justify-content: center; padding: 0;
+  border-radius: 50%; border: 1px solid var(--border2); background: var(--panel4); color: var(--text); cursor: pointer;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.4);
+}
+.pp-play svg { width: 11px; height: 11px; margin-left: 1px; }
+.pp-play:hover { background: var(--accent); border-color: var(--accent); color: #1b1408; }
+.pp-tile:hover .pp-play, .pp-tile.hl .pp-play { display: flex; }
+.pp-tile:hover .pp-tx, .pp-tile.hl .pp-tx { padding-right: 0; }
+.pp-tile.g-sampler:hover .pp-tx, .pp-tile.g-sampler.hl .pp-tx { padding-right: 22px; }
+
+.pp-empty { display: flex; flex-direction: column; align-items: center; gap: 8px; padding: 70px 20px; color: var(--text-faint); }
+.pp-empty-ic svg { width: 28px; height: 28px; opacity: 0.6; }
+
+.pp-modal .modal-buttons { align-items: center; }
+.pp-foot { margin-right: auto; display: flex; align-items: center; gap: 4px; color: var(--text-faint); font-size: 11px; white-space: nowrap; overflow: hidden; }
+.pp-foot kbd { margin-left: 2px; }
+.pp-foot-sep { width: 1px; height: 12px; background: var(--border); margin: 0 8px; }
+
+/* while a tile is being dragged the picker fades and lets drops through to the windows below */
+.modal-overlay.pp-dragging { background: transparent; pointer-events: none; }
+.modal-overlay.pp-dragging .modal { opacity: 0.12; transition: opacity 0.15s; }

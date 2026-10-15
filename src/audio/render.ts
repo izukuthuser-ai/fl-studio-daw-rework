@@ -38,10 +38,25 @@ export async function renderProject(project: Project, o: RenderOpts): Promise<Au
   g.sync(proj);
   const autoInit = new Set<string>();
   if (o.mode === 'song') startMidClips(g, proj, start, lead, spt);
-  for (let t = start; t < end; ) {
-    const to = Math.min(end, (Math.floor(t / STEP) + 1) * STEP);
-    scheduleSpan(g, proj, { mode: o.mode, patternId: o.patternId, from: t, to, time0: lead + (t - start) * spt, spt, autoInit });
-    t = to;
+  // Schedule incrementally while rendering (suspend/resume) so only the voices that are
+  // about to play exist in the graph — creating the whole song up front is ~10x slower.
+  let t = start;
+  const scheduleUntil = (sec: number) => {
+    while (t < end && lead + (t - start) * spt < sec) {
+      const to = Math.min(end, (Math.floor(t / STEP) + 1) * STEP);
+      scheduleSpan(g, proj, { mode: o.mode, patternId: o.patternId, from: t, to, time0: lead + (t - start) * spt, spt, autoInit });
+      t = to;
+    }
+  };
+  const WINDOW = 0.5;
+  scheduleUntil(WINDOW * 2);
+  const quantum = 128 / o.sampleRate;
+  for (let s = WINDOW; s < dur - WINDOW; s += WINDOW) {
+    const at = Math.round(s / quantum) * quantum;
+    ctx.suspend(at).then(() => {
+      scheduleUntil(at + WINDOW * 2);
+      ctx.resume();
+    });
   }
   const buf = await ctx.startRendering();
   return buf;

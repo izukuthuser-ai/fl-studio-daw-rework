@@ -5,6 +5,7 @@ import { UIState } from './store';
 import { deepClone, paletteColor, uid } from './util';
 import { FX_DEFS, fxDefaults, toNorm, FX_DEFS as D } from './params';
 import { BUILTIN_BY_ID } from '../audio/sounds';
+import { samples } from '../audio/samples';
 
 export function defaultSampler(ref: string | null = null, name = '(empty)'): SamplerParams {
   const b = ref?.startsWith('builtin:') ? BUILTIN_BY_ID.get(ref.slice(8)) : undefined;
@@ -125,7 +126,7 @@ export function newChannel(type: 'sampler' | 'synth', opts: Partial<Channel> & {
     ...rest,
   };
   if (type === 'sampler') {
-    ch.sampler = defaultSampler(sampleRef ?? null);
+    ch.sampler = defaultSampler(sampleRef ?? null, sampleRef ? samples.displayName(sampleRef) : undefined);
     if (!opts.name && ch.sampler.sampleRef) ch.name = ch.sampler.sampleName;
   } else ch.synth = synthPreset(preset ?? 'Init');
   return ch;

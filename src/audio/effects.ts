@@ -3,6 +3,7 @@
 import { FxSlot, FxType } from '../core/types';
 import { DELAY_BEATS } from '../core/params';
 import { dbToGain } from '../core/util';
+import { kBiquad } from './nodes';
 
 export interface AutoParam {
   param: AudioParam;
@@ -86,7 +87,7 @@ class EqFx extends Effect {
     super(ctx, slot, bpm);
     const types: BiquadFilterType[] = ['highpass', 'lowshelf', 'peaking', 'peaking', 'highshelf', 'lowpass'];
     this.f = types.map((t) => {
-      const b = ctx.createBiquadFilter();
+      const b = kBiquad(ctx);
       b.type = t;
       return b;
     });
@@ -248,9 +249,9 @@ class ReverbFx extends Effect {
     this.pre = ctx.createDelay(1);
     this.conv = ctx.createConvolver();
     this.conv.normalize = true;
-    this.hp = ctx.createBiquadFilter();
+    this.hp = kBiquad(ctx);
     this.hp.type = 'highpass';
-    this.lp = ctx.createBiquadFilter();
+    this.lp = kBiquad(ctx);
     this.lp.type = 'lowpass';
     this.input.connect(this.hp).connect(this.pre).connect(this.conv).connect(this.lp).connect(this.wet);
     this.nodes.push(this.pre, this.conv, this.hp, this.lp);
@@ -296,9 +297,9 @@ class DelayFx extends Effect {
     this.dL = ctx.createDelay(5);
     this.dR = ctx.createDelay(5);
     this.fb = ctx.createGain();
-    this.hp = ctx.createBiquadFilter();
+    this.hp = kBiquad(ctx);
     this.hp.type = 'highpass';
-    this.lp = ctx.createBiquadFilter();
+    this.lp = kBiquad(ctx);
     this.lp.type = 'lowpass';
     this.merger = ctx.createChannelMerger(2);
     this.input.connect(this.mono).connect(this.dL);
@@ -352,7 +353,7 @@ class FilterFx extends Effect {
   private depth: GainNode;
   constructor(ctx: BaseAudioContext, slot: FxSlot, bpm: number) {
     super(ctx, slot, bpm);
-    this.f = ctx.createBiquadFilter();
+    this.f = kBiquad(ctx);
     this.lfo = ctx.createOscillator();
     this.depth = ctx.createGain();
     this.lfo.connect(this.depth).connect(this.f.detune);
@@ -401,7 +402,7 @@ class DistortionFx extends Effect {
     super(ctx, slot, bpm);
     this.shaper = ctx.createWaveShaper();
     this.shaper.oversample = '4x';
-    this.tone = ctx.createBiquadFilter();
+    this.tone = kBiquad(ctx);
     this.tone.type = 'lowpass';
     this.out = ctx.createGain();
     this.input.connect(this.shaper).connect(this.tone).connect(this.out).connect(this.wet);
@@ -429,7 +430,7 @@ class BitcrusherFx extends Effect {
     super(ctx, slot, bpm);
     this.pre = ctx.createGain();
     this.shaper = ctx.createWaveShaper();
-    this.tone = ctx.createBiquadFilter();
+    this.tone = kBiquad(ctx);
     this.tone.type = 'lowpass';
     this.input.connect(this.pre).connect(this.shaper).connect(this.tone).connect(this.wet);
     this.nodes.push(this.pre, this.shaper, this.tone);
@@ -518,7 +519,7 @@ export class WidthNode {
     this.side.gain.value = 0.5;
     this.sideIn = ctx.createGain();
     this.sideIn.gain.value = -0.5;
-    this.sideHp = ctx.createBiquadFilter();
+    this.sideHp = kBiquad(ctx);
     this.sideHp.type = 'highpass';
     this.sideHp.frequency.value = 10;
     this.sideGain = ctx.createGain();

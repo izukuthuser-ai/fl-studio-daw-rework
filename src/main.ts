@@ -20,6 +20,7 @@ import { createChannelSettings } from './ui/channelSettings';
 import { initPluginPicker } from './ui/pluginPicker';
 import { toast } from './ui/widgets';
 import { PanelDef } from './ui/panel';
+import { renderProject } from './audio/render';
 import { WindowId } from './core/types';
 
 async function boot() {
@@ -45,7 +46,7 @@ async function boot() {
   add('channelrack', 'Channel rack', ICONS.channelRack, createChannelRack(), { x: BW + 30, y: 26, w: Math.min(820, W - BW - 60), h: 360 }, { w: 420, h: 160 });
   add('pianoroll', 'Piano roll', ICONS.pianoRoll, createPianoRoll(), { x: BW + 60, y: 50, w: W - BW - 90, h: Math.round(H * 0.68) }, { w: 480, h: 240 });
   add('mixer', 'Mixer', ICONS.mixer, createMixer(), { x: BW + 20, y: Math.round(H * 0.36), w: W - BW - 40, h: Math.round(H * 0.62) }, { w: 520, h: 300 });
-  add('channelsettings', 'Channel settings', ICONS.synth, createChannelSettings(), { x: Math.round(W * 0.35), y: 40, w: 560, h: 430 }, { w: 420, h: 320 });
+  add('channelsettings', 'Channel settings', ICONS.synth, createChannelSettings(), { x: Math.round(W * 0.32), y: 30, w: 640, h: 500 }, { w: 420, h: 320 });
   initPluginPicker();
 
   if (!wm.restoreLayout()) {
@@ -53,6 +54,19 @@ async function boot() {
     wm.show('playlist');
     wm.show('channelrack');
   } else if (!wm.get('playlist')!.visible) wm.show('playlist');
+
+  // keep the playlist docked next to the browser: widen it when the browser hides
+  let browserVis = wm.get('browser')!.visible;
+  wm.onChange(() => {
+    const b = wm.get('browser')!;
+    const pl = wm.get('playlist')!;
+    if (b.visible === browserVis || pl.maximized) return;
+    browserVis = b.visible;
+    const r = pl.rect();
+    const bw = b.rect().w;
+    if (!b.visible && Math.abs(r.x - bw) < 8) pl.setRect({ ...r, x: 0, w: r.w + bw });
+    else if (b.visible && r.x < 8) pl.setRect({ ...r, x: bw, w: Math.max(420, r.w - bw) });
+  });
 
   initKeys();
   initMidi();
@@ -83,7 +97,7 @@ async function boot() {
   });
 
   if (!recovered && !launch) toast('Demo song loaded — Space plays the pattern, L switches to Song mode · F1 = shortcuts', 'info', 5000);
-  (window as any).__lf = { store, engine, wm, hooks };
+  (window as any).__lf = { store, engine, wm, hooks, renderProject };
 }
 
 boot().catch((e) => {

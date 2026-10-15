@@ -5,6 +5,7 @@ import { chanVolToGain, clamp, dbToGain, midiToFreq } from '../core/util';
 import { CHANNEL_PARAMS, FX_DEFS, MIXER_PARAMS, ParamDef, fromNorm } from '../core/params';
 import { Effect, WidthNode, createEffect } from './effects';
 import { SampleBank } from './samples';
+import { kBiquad } from './nodes';
 
 const isOffline = (ctx: BaseAudioContext) => typeof OfflineAudioContext !== 'undefined' && ctx instanceof OfflineAudioContext;
 
@@ -99,7 +100,7 @@ export class ChannelStrip {
   destId = '';
   constructor(ctx: BaseAudioContext, public id: ID) {
     this.input = ctx.createGain();
-    this.filter = ctx.createBiquadFilter();
+    this.filter = kBiquad(ctx);
     this.filter.type = 'lowpass';
     this.filter.frequency.value = 20000;
     this.vol = ctx.createGain();
@@ -254,9 +255,17 @@ export class AudioGraph {
     return null;
   }
 
-  private register(v: Voice, endNode: AudioScheduledSourceNode) {
+  private register(v: Voice, endNode: AudioScheduledSourceNode, nodes: AudioNode[] = []) {
     this.voices.add(v);
-    endNode.onended = () => this.voices.delete(v);
+    endNode.onended = () => {
+      this.voices.delete(v);
+      // release the voice's nodes so long sessions / exports don't accumulate idle graph
+      for (const n of nodes) {
+        try {
+          n.disconnect();
+        } catch {}
+      }
+    };
   }
 
   private samplerVoice(ch: Channel, strip: ChannelStrip, key: number, vel: number, pan: number, when: number, dur: number | null, pitch: number, audioClip?: { offset: number }): Voice | null {
@@ -270,12 +279,14 @@ export class AudioGraph {
     src.playbackRate.value = rate;
     const g = ctx.createGain();
     let last: AudioNode = g;
+    const vnodes: AudioNode[] = [src, g];
     src.connect(g);
     if (pan) {
       const p = ctx.createStereoPanner();
       p.pan.value = clamp(pan, -1, 1);
       g.connect(p);
       last = p;
+      vnodes.push(p);
     }
     last.connect(strip.input);
     const peak = audioClip ? 1 : this.velGain(vel);
@@ -338,7 +349,7 @@ export class AudioGraph {
       },
     };
     this.choke(voice.cutGroup, t0, voice);
-    this.register(voice, src);
+    this.register(voice, src, vnodes);
     return voice;
   }
 
@@ -353,17 +364,19 @@ export class AudioGraph {
     const ctx = this.ctx;
     const t0 = Math.max(when, ctx.currentTime);
     const amp = ctx.createGain();
-    const filt = ctx.createBiquadFilter();
+    const filt = kBiquad(ctx);
     filt.type = sp.filterType;
     filt.frequency.value = sp.cutoff;
     filt.Q.value = sp.reso;
     filt.connect(amp);
     let last: AudioNode = amp;
+    const vnodes: AudioNode[] = [filt, amp];
     if (pan) {
       const p = ctx.createStereoPanner();
       p.pan.value = clamp(pan, -1, 1);
       amp.connect(p);
       last = p;
+      vnodes.push(p);
     }
     last.connect(strip.input);
 
@@ -386,6 +399,7 @@ export class AudioGraph {
         const spread = uni === 1 ? 0 : (u / (uni - 1)) * 2 - 1;
         const og = ctx.createGain();
         og.gain.value = o.level * norm;
+        vnodes.push(og);
         let src: AudioScheduledSourceNode;
         if (o.wave === 'noise') {
           const n = ctx.createBufferSource();
@@ -408,6 +422,7 @@ export class AudioGraph {
         if (uni > 1) {
           const p = ctx.createStereoPanner();
           p.pan.value = spread * 0.6;
+          vnodes.push(p);
           og.connect(p).connect(filt);
         } else og.connect(filt);
         sources.push(src);
@@ -473,7 +488,8 @@ export class AudioGraph {
       },
     };
     if (sp.mono) this.monoLast.set(ch.id, { key, voice });
-    if (sources.length) this.register(voice, sources[0]);
+    vnodes.push(...sources);
+    if (sources.length) this.register(voice, sources[0], vnodes);
     return voice;
   }
 

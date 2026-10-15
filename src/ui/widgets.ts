@@ -284,6 +284,9 @@ export interface MenuItem {
 }
 
 let openMenus: HTMLElement[] = [];
+export function menusOpen() {
+  return openMenus.some((m) => m && m.isConnected);
+}
 export function closeMenus() {
   for (const m of openMenus) m.remove();
   openMenus = [];
@@ -344,7 +347,13 @@ export function showMenu(items: MenuItem[], x: number, y: number, level = 0): HT
   }
   document.body.append(m);
   const r = m.getBoundingClientRect();
-  m.style.left = Math.max(0, Math.min(x, innerWidth - r.width - 4)) + 'px';
+  let left = x;
+  if (left + r.width > innerWidth - 4) {
+    // submenus flip to the left of their parent; root menus shift left
+    const parent = level > 0 ? openMenus[level - 1]?.getBoundingClientRect() : null;
+    left = parent ? parent.left - r.width + 2 : innerWidth - r.width - 4;
+  }
+  m.style.left = Math.max(0, left) + 'px';
   m.style.top = Math.max(0, Math.min(y, innerHeight - r.height - 4)) + 'px';
   openMenus[level] = m;
   return m;

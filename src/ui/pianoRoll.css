@@ -1,0 +1,109 @@
+/* ===================== Piano roll ===================== */
+.pr {
+  --pr-key-w: 66px;
+  --pr-ruler-h: 26px;
+  --pr-sb: 12px;
+  --pr-lane-h: 92px;
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  background: #2d3235;
+  container-type: inline-size;
+}
+
+/* ---------- toolbar ---------- */
+.pr-bar { gap: 3px; padding: 3px 6px; row-gap: 3px; }
+.pr-bar .icon-btn { height: 24px; }
+.pr-menu-btn svg { width: 17px; height: 17px; }
+.pr-ch {
+  display: inline-flex; align-items: center; gap: 6px; height: 24px; max-width: 170px; padding: 0 6px 0 7px;
+  border: 1px solid #343a3d; border-radius: 4px; background: linear-gradient(#555f65, #4b5358);
+  color: var(--text); cursor: pointer; flex: none; box-shadow: inset 0 1px 0 rgba(255,255,255,.04);
+}
+.pr-ch:hover { background: linear-gradient(#5e686f, #515a60); }
+.pr-ch-sw { width: 10px; height: 10px; border-radius: 3px; flex: none; box-shadow: 0 0 0 1px rgba(0,0,0,.45), inset 0 1px 0 rgba(255,255,255,.25); }
+.pr-ch-name { font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+.pr-caret { display: flex; color: var(--text-dim); }
+.pr-caret svg { width: 12px; height: 12px; }
+
+.pr-tools { display: inline-flex; gap: 1px; padding: 1px; border-radius: 5px; background: #383f43; border: 1px solid #2c3135; flex: none; }
+.pr-tools .tool-btn { width: 25px; height: 22px; }
+.pr-tools .tool-btn svg { width: 15px; height: 15px; }
+
+.pr-chip { display: inline-flex; align-items: center; gap: 3px; height: 24px; padding: 0 2px 0 5px; border-radius: 5px; background: #41484c; border: 1px solid #33383c; flex: none; }
+.pr-chip-i { display: flex; color: var(--text-faint); }
+.pr-chip-i svg { width: 13px; height: 13px; }
+.pr-chip .select { height: 20px; border-color: transparent; background: #363c40; padding: 0 2px; font-size: 11px; }
+.pr-chip .select:hover { border-color: var(--border); }
+.pr-chip .select:focus { border-color: var(--accent); }
+.pr-chip .icon-btn { min-width: 22px; height: 20px; padding: 0 3px; }
+.pr-chip .icon-btn svg { width: 14px; height: 14px; }
+.pr-snap { width: 92px; }
+.pr-root { width: 44px; }
+.pr-stype { width: 112px; }
+.pr-chord { width: 104px; }
+.pr-chord.on { color: var(--accent); }
+.pr-status { margin-left: auto; padding: 0 4px 0 10px; color: var(--text-faint); font-size: 11px; white-space: nowrap; font-variant-numeric: tabular-nums; }
+@container (max-width: 1080px) { .pr-status { display: none; } }
+
+/* ---------- editor grid ---------- */
+.pr-body {
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: var(--pr-key-w) minmax(0, 1fr) var(--pr-sb);
+  grid-template-rows: var(--pr-ruler-h) minmax(0, 1fr) 5px var(--pr-lane-h) var(--pr-sb);
+  background: #282c2f;
+}
+.pr-body.no-lane { grid-template-rows: var(--pr-ruler-h) minmax(0, 1fr) 0 0 var(--pr-sb); }
+.pr-body.no-lane .pr-split, .pr-body.no-lane .pr-lane, .pr-body.no-lane .pr-lane-tabs { display: none; }
+
+.pr-cv { position: relative; overflow: hidden; min-width: 0; min-height: 0; }
+.pr-cv canvas { position: absolute; left: 0; top: 0; touch-action: none; }
+.pr-grid canvas { cursor: crosshair; }
+.pr-keys canvas { cursor: pointer; }
+.pr-ruler canvas { cursor: text; }
+.pr-lane canvas { cursor: ns-resize; }
+
+.pr-corner {
+  display: flex; align-items: center; justify-content: center;
+  background: linear-gradient(#515a5f, #454d51); border-right: 1px solid #23272a; border-bottom: 1px solid #272b2e;
+  color: var(--accent); font: 600 11px var(--mono); letter-spacing: .02em;
+}
+.pr-fill { background: #353b3f; }
+
+.pr-split { grid-column: 1 / -1; cursor: ns-resize; background: linear-gradient(#454d51, #383f43); border-top: 1px solid #23272a; border-bottom: 1px solid #23272a; position: relative; }
+.pr-split::after { content: ''; position: absolute; left: 50%; top: 1px; width: 28px; height: 1px; margin-left: -14px; background: #77848c; box-shadow: 0 2px 0 #77848c; opacity: .8; }
+.pr-split:hover { background: linear-gradient(#515a5f, #454d51); }
+
+.pr-lane-tabs { display: flex; flex-direction: column; gap: 3px; padding: 6px 6px; background: #383f43; border-right: 1px solid #23272a; }
+.pr-lane-tab { height: 20px; border-radius: 4px; border: 1px solid #33383c; background: #444b50; color: var(--text-dim); font-size: 10px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; cursor: pointer; padding: 0; }
+.pr-lane-tab:hover { color: var(--text); background: #4e565b; }
+.pr-lane-tab.on { color: var(--accent); border-color: rgba(246,164,50,.45); background: rgba(246,164,50,.10); }
+
+/* scrollbars */
+.pr-hs, .pr-vs { position: relative; background: #2d3235; }
+.pr-hs { border-top: 1px solid #23272a; }
+.pr-vs { border-left: 1px solid #23272a; }
+.pr-thumb { position: absolute; border-radius: 5px; background: #626d75; transition: background .12s; }
+.pr-hs .pr-thumb { top: 2px; bottom: 2px; left: 0; }
+.pr-vs .pr-thumb { left: 2px; right: 2px; top: 0; }
+.pr-thumb:hover, .pr-thumb:active { background: #88939b; }
+
+/* playhead */
+.pr-ph { position: absolute; top: 0; bottom: 0; left: 0; width: 1px; background: #8fe36d; box-shadow: 0 0 6px rgba(143,227,109,.55); pointer-events: none; display: none; will-change: transform; z-index: 2; }
+.pr-ph-tri { position: absolute; bottom: 0; left: -6px; width: 0; height: 0; border-left: 6px solid transparent; border-right: 6px solid transparent; border-top: 9px solid #8fe36d; pointer-events: none; display: none; will-change: transform; filter: drop-shadow(0 1px 1px rgba(0,0,0,.6)); }
+
+/* ---------- tool dialogs ---------- */
+.pr-dlg { display: flex; flex-direction: column; gap: 10px; }
+.pr-dlg-intro { color: var(--text-dim); line-height: 1.45; font-size: 11.5px; }
+.pr-form { grid-template-columns: 110px 1fr; }
+.pr-form-note { grid-column: 1 / -1; color: var(--text-dim); }
+.pr-range-row { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.pr-range { flex: 1; min-width: 0; accent-color: var(--accent); height: 16px; }
+.pr-num { width: 64px; text-align: right; font-family: var(--mono); padding: 2px 4px; }
+.pr-unit { color: var(--text-faint); font-size: 11px; white-space: nowrap; }
+.pr-check { display: flex; align-items: center; gap: 6px; color: var(--text-dim); cursor: pointer; }
+.pr-check input { accent-color: var(--accent); margin: 0; }
+.pr-dlg .select { height: 24px; }
