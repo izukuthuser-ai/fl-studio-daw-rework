@@ -5,6 +5,7 @@ import { barLen, uid } from '../core/util';
 import { patternLen, secPerTick, songLen } from '../core/timing';
 import { AudioGraph, Voice } from './graph';
 import { samples } from './samples';
+import { measureNodeLatency } from './latency';
 import { automatedTargets, scheduleSpan, startMidClips } from './sequencer';
 import { ensureWorklets } from './plugins/registry';
 import { AudioInputManager, RecordedTake } from './input';
@@ -60,7 +61,7 @@ export class Engine extends Emitter<EngineEvents> {
     this.ctx = new AC({ latencyHint: 'interactive' });
     samples.decodeCtx = this.ctx;
     samples.sampleRate = this.ctx.sampleRate;
-    await ensureWorklets(this.ctx);
+    await Promise.all([ensureWorklets(this.ctx), measureNodeLatency(this.ctx.sampleRate)]);
     this.graph = new AudioGraph(this.ctx, samples, true);
     this.graph.sync(store.project);
     this.graph.setMonitorVolume(store.ui.masterVol);
@@ -69,6 +70,8 @@ export class Engine extends Emitter<EngineEvents> {
     this.inputs = new AudioInputManager(this.ctx, this.graph);
     this.inputs.sync(store.project);
     store.on('project', () => {
+      // automation clips added/removed while the song plays take over / hand back their targets right away
+      if (this.playing && this.mode === 'song') this.graph.automated = automatedTargets(store.project);
       this.graph.sync(store.project);
       this.inputs.sync(store.project);
       const bpm = store.project.bpm;

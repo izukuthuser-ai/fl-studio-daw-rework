@@ -11,7 +11,7 @@ export interface InstrumentHost {
   readonly output: AudioNode;
   /** Automatable AudioParams exposed by the processor (macro1..macro4). */
   readonly params: Map<string, AudioParam>;
-  noteOn(key: number, vel: number, when: number, dur: number | null): InstrumentVoiceHandle;
+  noteOn(key: number, vel: number, when: number, dur: number | null, pan?: number): InstrumentVoiceHandle;
   setState(state: any): void;
   setTempo(bpm: number): void;
   allOff(when: number, hard?: boolean): void;

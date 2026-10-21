@@ -4,6 +4,7 @@ import { FxSlot, FxType } from '../core/types';
 import { DELAY_BEATS } from '../core/params';
 import { dbToGain } from '../core/util';
 import { kBiquad } from './nodes';
+import { nodeLatency } from './latency';
 
 export interface AutoParam {
   param: AudioParam;
@@ -20,6 +21,9 @@ export abstract class Effect {
   protected params: Record<string, number> = {};
   protected nodes: AudioNode[] = [];
   protected sources: AudioScheduledSourceNode[] = [];
+  /** Processing delay of the wet path in seconds (used for plugin delay compensation). */
+  latency = 0;
+  private dryDelay: DelayNode | null = null;
 
   constructor(protected ctx: BaseAudioContext, public slot: FxSlot, protected bpm: number) {
     this.input = ctx.createGain();
@@ -28,6 +32,23 @@ export abstract class Effect {
     this.wet = ctx.createGain();
     this.input.connect(this.dry).connect(this.output);
     this.wet.connect(this.output);
+  }
+
+  /**
+   * Declare the wet path's latency (samples). The dry path is delayed to match, so the effect's
+   * delay stays the same whether it's bypassed, mixed or fully wet (no comb filtering, no timing jumps).
+   */
+  protected setLatency(samples: number) {
+    const sec = Math.max(0, samples) / this.ctx.sampleRate;
+    this.latency = sec;
+    if (sec <= 0 && !this.dryDelay) return;
+    if (!this.dryDelay) {
+      this.dryDelay = this.ctx.createDelay(1);
+      this.input.disconnect(this.dry);
+      this.input.connect(this.dryDelay).connect(this.dry);
+      this.nodes.push(this.dryDelay);
+    }
+    this.dryDelay.delayTime.value = sec;
   }
 
   /** Called once after subclass constructed its graph. */
@@ -138,6 +159,7 @@ class CompressorFx extends Effect {
     this.makeup = ctx.createGain();
     this.input.connect(this.comp).connect(this.makeup).connect(this.wet);
     this.nodes.push(this.comp, this.makeup);
+    this.setLatency(nodeLatency(ctx.sampleRate).comp);
     this.init();
   }
   protected apply() {
@@ -163,8 +185,9 @@ class CompressorFx extends Effect {
   }
 }
 
+/** Hard clip at ±ceiling. */
 function clipCurve(ceiling: number) {
-  const n = 4096;
+  const n = 4097;
   const c = new Float32Array(n);
   for (let i = 0; i < n; i++) {
     const x = (i / (n - 1)) * 2 - 1;
@@ -173,9 +196,24 @@ function clipCurve(ceiling: number) {
   return c;
 }
 
+/** Transparent up to 90 % of the ceiling, then a smooth knee that approaches (never reaches) it. */
+function softClipCurve(ceiling: number) {
+  const n = 4097;
+  const c = new Float32Array(n);
+  const k = 0.9 * ceiling;
+  const r = ceiling - k;
+  for (let i = 0; i < n; i++) {
+    const x = (i / (n - 1)) * 2 - 1;
+    const a = Math.abs(x);
+    c[i] = a <= k ? x : Math.sign(x) * (k + r * Math.tanh((a - k) / r));
+  }
+  return c;
+}
+
 class LimiterFx extends Effect {
   private pre: GainNode;
   private comp: DynamicsCompressorNode;
+  private soft: WaveShaperNode;
   private clip: WaveShaperNode;
   constructor(ctx: BaseAudioContext, slot: FxSlot, bpm: number) {
     super(ctx, slot, bpm);
@@ -184,10 +222,16 @@ class LimiterFx extends Effect {
     this.comp.knee.value = 0;
     this.comp.ratio.value = 20;
     this.comp.attack.value = 0.001;
+    // 4x-oversampled soft knee (smooth, low aliasing), then a sample-exact brick wall: the
+    // oversampler's filters ring a little above the knee, the final stage guarantees the ceiling.
+    this.soft = ctx.createWaveShaper();
+    this.soft.oversample = '4x';
     this.clip = ctx.createWaveShaper();
-    this.clip.oversample = '4x';
-    this.input.connect(this.pre).connect(this.comp).connect(this.clip).connect(this.wet);
-    this.nodes.push(this.pre, this.comp, this.clip);
+    this.clip.oversample = 'none';
+    this.input.connect(this.pre).connect(this.comp).connect(this.soft).connect(this.clip).connect(this.wet);
+    this.nodes.push(this.pre, this.comp, this.soft, this.clip);
+    const L = nodeLatency(ctx.sampleRate);
+    this.setLatency(L.comp + L.ws4x);
     this.init();
   }
   protected apply(prev: Record<string, number>, force: boolean) {
@@ -195,7 +239,11 @@ class LimiterFx extends Effect {
     this.set(this.pre.gain, dbToGain(p.gain));
     this.set(this.comp.threshold, p.threshold);
     this.set(this.comp.release, p.release);
-    if (force || prev.ceiling !== p.ceiling) this.clip.curve = clipCurve(dbToGain(p.ceiling));
+    if (force || prev.ceiling !== p.ceiling) {
+      const c = dbToGain(p.ceiling);
+      this.soft.curve = softClipCurve(c);
+      this.clip.curve = clipCurve(c);
+    }
   }
   autoParam(key: string): AutoParam | null {
     if (key === 'gain') return { param: this.pre.gain, map: dbToGain };
@@ -407,6 +455,7 @@ class DistortionFx extends Effect {
     this.out = ctx.createGain();
     this.input.connect(this.shaper).connect(this.tone).connect(this.out).connect(this.wet);
     this.nodes.push(this.shaper, this.tone, this.out);
+    this.setLatency(nodeLatency(ctx.sampleRate).ws4x);
     this.init();
   }
   protected apply(prev: Record<string, number>, force: boolean) {
@@ -508,7 +557,9 @@ export class WidthNode {
   private sideIn: GainNode;
   readonly sideGain: GainNode;
   private sideInv: GainNode;
+  private sideSum: GainNode;
   private sideHp: BiquadFilterNode;
+  private monoBass = false;
   private all: AudioNode[];
   constructor(private ctx: BaseAudioContext) {
     this.input = ctx.createGain();
@@ -531,21 +582,29 @@ export class WidthNode {
     this.split.connect(this.mid, 1);
     this.split.connect(this.side, 0);
     this.split.connect(this.sideIn, 1);
-    this.sideIn.connect(this.sideHp);
-    this.side.connect(this.sideHp);
+    // side = (L − R) / 2 → (optional mono-bass high-pass) → width gain. Without mono bass the side path
+    // has no filter, so width 100 % rebuilds L/R exactly (a filter's phase shift would raise peaks after a limiter).
+    this.sideSum = ctx.createGain();
+    this.sideIn.connect(this.sideSum);
+    this.side.connect(this.sideSum);
+    this.sideSum.connect(this.sideGain);
+    this.sideHp.frequency.value = 150;
     this.sideHp.connect(this.sideGain);
     this.mid.connect(this.output, 0, 0);
     this.mid.connect(this.output, 0, 1);
     this.sideGain.connect(this.output, 0, 0);
     this.sideGain.connect(this.sideInv).connect(this.output, 0, 1);
-    this.all = [this.input, this.split, this.mid, this.side, this.sideIn, this.sideHp, this.sideGain, this.sideInv, this.output];
+    this.all = [this.input, this.split, this.mid, this.side, this.sideIn, this.sideSum, this.sideHp, this.sideGain, this.sideInv, this.output];
   }
   setWidth(w: number, smooth = true) {
     if (smooth && !(this.ctx instanceof OfflineAudioContext)) this.sideGain.gain.setTargetAtTime(w, this.ctx.currentTime, 0.015);
     else this.sideGain.gain.value = w;
   }
   setMonoBass(on: boolean) {
-    this.sideHp.frequency.value = on ? 150 : 10;
+    if (on === this.monoBass) return;
+    this.monoBass = on;
+    this.sideSum.disconnect();
+    this.sideSum.connect(on ? this.sideHp : this.sideGain);
   }
   dispose() {
     for (const n of this.all) {

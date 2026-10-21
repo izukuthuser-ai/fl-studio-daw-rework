@@ -15,11 +15,11 @@ Extend `InstrumentProcessor` and implement:
 | method | when |
 |---|---|
 | `onState(state)` | whole patch replaced (initial state arrives from `processorOptions` on the first block) |
-| `noteOn(id, key, vel)` | sample-accurate; `key` may be fractional (channel pitch knob); `vel` 0..1 |
+| `noteOn(id, key, vel, pan)` | sample-accurate; `key` may be fractional (channel pitch knob); `vel` 0..1; `pan` −1..1 = the note's pan from the Piano roll (apply it per voice) |
 | `noteOff(id)` | release the voice with that id |
 | `kill(id)` | stop that voice now (≈5 ms fade) |
 | `allOff(hard)` | release all (or hard-stop all) |
-| `render(out, from, to, macros)` | **add** stereo audio into `out[0]`, `out[1]` for frames `[from, to)`; `macros` = 4 automatable values 0..1 |
+| `render(out, from, to, macros)` | **add** stereo audio into `out[0]`, `out[1]` for frames `[from, to)`; `macros[i]` = playlist automation of macro *i* (0..1, absolute) or **−1 when not automated** — then use the macro knob from your state |
 | `onTempo(bpm)` / `this.bpm` | for tempo-synced LFOs / arps |
 | `vizData()` | optional: small object posted ~30×/s while the UI asked for visualisation |
 
@@ -43,6 +43,7 @@ registerWorklet(url)                    // audio/plugins/registry.ts — if the 
 registerFxUI({ type, size, createUI })  // audio/plugins/registry.ts — optional custom window UI
 ```
 The FxType union in `core/types.ts` must contain the type. Non-numeric state can live in `FxSlot.data`.
+If the effect delays its output (look-ahead, oversampling FIRs…), call `this.setLatency(samples)` in its constructor: the mixer then delays every other path so all inserts stay in time (plugin delay compensation), and the effect's dry path is delayed to match. Effects whose type isn't registered (newer project / missing plugin) are kept in the project and pass audio through.
 Mixer slots open `openFxWindow(slotId)` (ui/pluginWindow.ts); without a custom UI a generic knob page is shown.
 
 ## Audio input & recording

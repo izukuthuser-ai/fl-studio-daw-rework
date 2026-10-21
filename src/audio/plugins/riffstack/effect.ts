@@ -6,7 +6,7 @@ import type { FxSlot } from '../../../core/types';
 import { DELAY_BEATS } from '../../../core/params';
 import { cabIR, reverbIR } from './ir';
 import { EQ_FREQS, RS_PARAM, WORKLET_AUTO, WORKLET_KEYS, rsDefaults } from './params';
-import type { RiffViz } from './dsp';
+import { RS_LATENCY, type RiffViz } from './dsp';
 
 const dbG = (d: number) => Math.pow(10, d / 20);
 const DEFAULTS = rsDefaults();
@@ -92,6 +92,7 @@ export class RiffstackFx extends Effect {
       };
       this.input.connect(this.node).connect(pre);
       n.push(this.node);
+      this.setLatency(RS_LATENCY);
     } catch (e) {
       console.warn('Riffstack: amp worklet unavailable, passing through', e);
       this.node = null;

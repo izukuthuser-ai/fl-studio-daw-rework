@@ -1,7 +1,7 @@
 {
   "name": "loopforge-studio",
   "productName": "LoopForge Studio",
-  "version": "0.1.0",
+  "version": "0.2.1",
   "description": "A pattern-based DAW with FL Studio-compatible shortcuts, rebuilt to be faster and friendlier.",
   "author": "izukuthuser",
   "license": "MIT",
@@ -27,7 +27,14 @@
     "nsis": { "oneClick": false, "allowToChangeInstallationDirectory": true, "artifactName": "LoopForge-Studio-Setup-${version}.exe" },
     "portable": { "artifactName": "LoopForge-Studio-Portable-${version}.exe" },
     "linux": { "target": ["AppImage"], "category": "AudioVideo", "icon": "build/icon.png", "artifactName": "LoopForge-Studio-${version}.AppImage" },
-    "mac": { "target": ["dmg"], "category": "public.app-category.music", "icon": "build/icon.png" }
+    "mac": {
+      "target": ["dmg"],
+      "category": "public.app-category.music",
+      "icon": "build/icon.png",
+      "entitlements": "build/entitlements.mac.plist",
+      "entitlementsInherit": "build/entitlements.mac.plist",
+      "extendInfo": { "NSMicrophoneUsageDescription": "LoopForge Studio uses your audio inputs (microphone, guitar / line in) to monitor and record them on mixer tracks." }
+    }
   },
   "devDependencies": {
     "concurrently": "^9.1.0",

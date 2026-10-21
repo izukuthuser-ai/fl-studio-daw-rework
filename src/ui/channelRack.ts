@@ -1211,6 +1211,8 @@ export function createChannelRack(): PanelDef {
       // a dragged preset row (factory or user) loads that preset
       if (nid && d?.preset && choice.kind === 'plugin') applyPluginPreset(nid, d.preset);
       else if (nid && d?.preset && choice.kind === 'synth') applyPreset(nid, d.preset);
+      // like every other way of adding an instrument: show its window
+      if (nid && !ch) openPluginWindow(nid, 'show');
       return;
     }
     if (kind === 'preset') {

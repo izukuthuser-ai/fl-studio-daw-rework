@@ -6,7 +6,7 @@ import type { HostMsg } from './protocol';
 // AudioWorkletGlobalScope globals are declared in ./worklet-env.d.ts
 
 export type NoteEvent =
-  | { kind: 'on'; id: number; key: number; vel: number; time: number }
+  | { kind: 'on'; id: number; key: number; vel: number; time: number; pan: number }
   | { kind: 'off'; id: number; time: number }
   | { kind: 'kill'; id: number; time: number }
   | { kind: 'alloff'; time: number; hard: boolean };
@@ -18,11 +18,15 @@ export interface MacroParams {
   macro4: Float32Array;
 }
 
-export const MACRO_DESCRIPTORS = [1, 2, 3, 4].map((i) => ({ name: 'macro' + i, defaultValue: 0, minValue: 0, maxValue: 1, automationRate: 'k-rate' }));
+/**
+ * Macro AudioParams carry playlist automation as an absolute 0..1 value. A negative value (the default)
+ * means "not automated — use the macro knob from the plugin state".
+ */
+export const MACRO_DESCRIPTORS = [1, 2, 3, 4].map((i) => ({ name: 'macro' + i, defaultValue: -1, minValue: -1, maxValue: 1, automationRate: 'k-rate' }));
 
 /**
  * Base class for instrument processors.
- * Subclasses implement: onState(state), noteOn(id,key,vel), noteOff(id), kill(id), allOff(hard),
+ * Subclasses implement: onState(state), noteOn(id,key,vel,pan), noteOff(id), kill(id), allOff(hard),
  * and render(out: Float32Array[], from: number, to: number, macros: number[]).
  */
 export abstract class InstrumentProcessor extends AudioWorkletProcessor {
@@ -30,7 +34,7 @@ export abstract class InstrumentProcessor extends AudioWorkletProcessor {
   protected state: any = null;
   private queue: NoteEvent[] = [];
   private qHead = 0; // index of the next pending event (no shift() on the audio thread)
-  private macroBuf = [0, 0, 0, 0];
+  private macroBuf = [-1, -1, -1, -1];
   private vizOn = false;
   private vizCountdown = 0;
 
@@ -68,7 +72,7 @@ export abstract class InstrumentProcessor extends AudioWorkletProcessor {
         this.onState(m.state);
         break;
       case 'on':
-        this.push({ kind: 'on', id: m.id, key: m.key, vel: m.vel, time: m.time });
+        this.push({ kind: 'on', id: m.id, key: m.key, vel: m.vel, time: m.time, pan: Math.max(-1, Math.min(1, m.pan ?? 0)) || 0 });
         if (m.dur !== undefined) this.push({ kind: 'off', id: m.id, time: m.time + Math.max(0.001, m.dur) });
         break;
       case 'off':
@@ -127,10 +131,10 @@ export abstract class InstrumentProcessor extends AudioWorkletProcessor {
     const n = out[0].length;
     for (const ch of out) ch.fill(0);
     const macros = this.macroBuf;
-    macros[0] = params.macro1?.[0] ?? 0;
-    macros[1] = params.macro2?.[0] ?? 0;
-    macros[2] = params.macro3?.[0] ?? 0;
-    macros[3] = params.macro4?.[0] ?? 0;
+    macros[0] = params.macro1?.[0] ?? -1;
+    macros[1] = params.macro2?.[0] ?? -1;
+    macros[2] = params.macro3?.[0] ?? -1;
+    macros[3] = params.macro4?.[0] ?? -1;
     const t0 = currentTime;
     const spf = 1 / sampleRate;
     let pos = 0;
@@ -160,7 +164,7 @@ export abstract class InstrumentProcessor extends AudioWorkletProcessor {
   }
 
   private apply(e: NoteEvent) {
-    if (e.kind === 'on') this.noteOn(e.id, e.key, e.vel);
+    if (e.kind === 'on') this.noteOn(e.id, e.key, e.vel, e.pan);
     else if (e.kind === 'off') this.noteOff(e.id);
     else if (e.kind === 'kill') this.kill(e.id);
     else this.allOff(e.hard);
@@ -172,7 +176,8 @@ export abstract class InstrumentProcessor extends AudioWorkletProcessor {
     return undefined;
   }
   protected abstract onState(state: any): void;
-  protected abstract noteOn(id: number, key: number, vel: number): void;
+  /** `pan` is the note's pan (−1..1) from the piano roll — apply it per voice. */
+  protected abstract noteOn(id: number, key: number, vel: number, pan: number): void;
   protected abstract noteOff(id: number): void;
   protected abstract kill(id: number): void;
   protected abstract allOff(hard: boolean): void;

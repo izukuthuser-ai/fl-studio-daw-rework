@@ -89,6 +89,8 @@ class Voice {
   comb: Float32Array[] = [];
   combW = new Int32Array(2);
   prevAmp = 0;
+  panL = 1; // note pan (piano roll) as a balance
+  panR = 1;
   rng: Rng;
   cutViz = new Float64Array(2);
   constructor(seed: number) {
@@ -170,6 +172,7 @@ class HalcyonProcessor extends InstrumentProcessor {
   private gSrc = new Float64Array(N_SRC);
   private gMod = new Float64Array(N_DST);
   private macroEff = new Float64Array(4);
+  private macroKnob = new Float64Array(4); // knob values from the state (used when not automated)
   // voice settings
   private vMode = 0;
   private poly = 16;
@@ -417,7 +420,7 @@ class HalcyonProcessor extends InstrumentProcessor {
     T[P_RV_DAMP] = clamp01(fx.reverb.damp);
     T[P_RV_WIDTH] = clamp01(fx.reverb.width);
     T[P_RV_MIX] = clamp01(fx.reverb.mix);
-    for (let i = 0; i < 4; i++) T[P_MACRO + i] = clamp01(s.macros[i]);
+    for (let i = 0; i < 4; i++) T[P_MACRO + i] = this.macroKnob[i] = clamp01(s.macros[i]);
     if (!this.ready) {
       this.C.set(T);
       this.ready = true;
@@ -453,8 +456,10 @@ class HalcyonProcessor extends InstrumentProcessor {
   }
 
   // ======================= notes =======================
-  protected noteOn(id: number, key: number, vel: number) {
+  private notePan = 0;
+  protected noteOn(id: number, key: number, vel: number, pan = 0) {
     if (!this.ready) return;
+    this.notePan = pan;
     this.fxIdle = false;
     this.silent = 0;
     if (this.vMode !== 0) return this.monoOn(id, key, vel);
@@ -516,6 +521,9 @@ class HalcyonProcessor extends InstrumentProcessor {
     v.glideRate = this.glide > 0 ? Math.abs(key - v.pitch) / this.glide : 0;
     v.rand = v.rng.bi();
     v.prevAmp = 0;
+    const np = this.notePan;
+    v.panL = np > 0 ? Math.cos(np * 1.5707963267948966) : 1;
+    v.panR = np < 0 ? Math.cos(-np * 1.5707963267948966) : 1;
     for (let e = 0; e < N_ENV; e++) {
       v.eStage[e] = E_ATT;
       v.eT[e] = 0;
@@ -651,7 +659,12 @@ class HalcyonProcessor extends InstrumentProcessor {
   // ======================= render =======================
   protected render(out: Float32Array[], from: number, to: number, macros: number[]) {
     if (!this.ready) return;
-    for (let i = 0; i < 4; i++) this.T[P_MACRO_IN + i] = clamp01(macros[i] ?? 0);
+    // playlist automation (>= 0) replaces the knob value; negative = not automated
+    for (let i = 0; i < 4; i++) {
+      const m = macros[i] ?? -1;
+      this.T[P_MACRO + i] = m >= 0 ? clamp01(m) : this.macroKnob[i];
+      this.T[P_MACRO_IN + i] = 0;
+    }
     let pos = from;
     while (pos < to) {
       const n = Math.min(CH, to - pos);
@@ -950,25 +963,26 @@ class HalcyonProcessor extends InstrumentProcessor {
     if (done) amp = 0;
     const a0 = v.prevAmp, da = (amp - a0) / n;
     const mL = this.mixL, mR = this.mixR;
+    const bl = v.panL, br = v.panR;
     if (pL && pR) {
       if (qL && qR)
         for (let i = 0; i < n; i++) {
           const g = a0 + da * (i + 1);
-          mL[i] += (pL[i] + qL[i]) * g;
-          mR[i] += (pR[i] + qR[i]) * g;
+          mL[i] += (pL[i] + qL[i]) * g * bl;
+          mR[i] += (pR[i] + qR[i]) * g * br;
         }
       else
         for (let i = 0; i < n; i++) {
           const g = a0 + da * (i + 1);
-          mL[i] += pL[i] * g;
-          mR[i] += pR[i] * g;
+          mL[i] += pL[i] * g * bl;
+          mR[i] += pR[i] * g * br;
         }
     }
     if (useD)
       for (let i = 0; i < n; i++) {
         const g = a0 + da * (i + 1);
-        mL[i] += dL[i] * g;
-        mR[i] += dR[i] * g;
+        mL[i] += dL[i] * g * bl;
+        mR[i] += dR[i] * g * br;
       }
     v.prevAmp = amp;
     v.first = false;

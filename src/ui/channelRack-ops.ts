@@ -437,6 +437,7 @@ export function replaceInstrument(chId: ID, choice: InstrumentChoice, customize?
     }
     for (const a of p.automations) if (a.target.scope === 'channel' && a.target.id === chId) a.target.id = nc.id;
   });
+  store.aliasChannel(chId, nc.id); // undo / redo keep the selection on this channel
   const swap = (x: ID | null) => (x === chId ? nc.id : x);
   store.setUI({
     selectedChannels: store.ui.selectedChannels.map((x) => swap(x)!),

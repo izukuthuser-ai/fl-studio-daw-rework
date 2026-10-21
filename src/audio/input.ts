@@ -211,7 +211,8 @@ export class AudioInputManager {
       // latency compensation: what you played lines up with what you heard
       const dev = this.links.get(t.trackId)?.dev;
       const inLat = dev ? this.streams.get(dev)?.latency ?? 0 : 0;
-      const lat = (this.ctx.baseLatency ?? 0) + ((this.ctx as any).outputLatency ?? 0) + inLat;
+      // + plugin delay compensation: the backing track you played along to reached the speakers that much later
+      const lat = (this.ctx.baseLatency ?? 0) + ((this.ctx as any).outputLatency ?? 0) + inLat + this.graph.pdcTotal;
       const skip = Math.min(len, Math.round(lat * sr));
       const n = len - skip;
       if (n < sr * 0.05) continue;

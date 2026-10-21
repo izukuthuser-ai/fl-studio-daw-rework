@@ -9,7 +9,7 @@ import { initWM, wm } from './ui/wm';
 import { registerGlobalCommands, hooks } from './ui/actions';
 import { initDialogs } from './ui/dialogs';
 import { initKeys, initMidi } from './ui/keys';
-import { checkRecovery, confirmDiscard, openProject, startAutosave, updateTitle } from './ui/fileops';
+import { checkRecovery, confirmDiscard, loadProject, openProject, parseProjectText, serialize, startAutosave, updateTitle } from './ui/fileops';
 import { native } from './core/native';
 import { ICONS } from './ui/icons';
 import { createPianoRoll } from './ui/pianoRoll';
@@ -105,7 +105,7 @@ async function boot() {
   });
 
   if (!recovered && !launch) toast('Demo song loaded — Space plays the pattern, L switches to Song mode · F1 = shortcuts', 'info', 5000);
-  (window as any).__lf = { store, engine, wm, hooks, renderProject, samples, ensureWorklets, createEffect, encodeWav, openPluginWindow, openFxWindow };
+  (window as any).__lf = { store, engine, wm, hooks, renderProject, samples, ensureWorklets, createEffect, encodeWav, openPluginWindow, openFxWindow, parseProjectText, serialize, loadProject };
 }
 
 boot().catch((e) => {

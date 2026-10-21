@@ -433,6 +433,7 @@ export function toggleFx(slotId: string) {
 
 export function resetFx(slotId: string) {
   commitSlot(slotId, 'Reset effect', (s) => {
+    if (!FX_DEFS[s.type]) return; // effect from a newer build / missing plugin: keep its settings
     s.params = fxDefaults(s.type);
     s.mix = FX_DEFS[s.type].defaultMix;
     s.enabled = true;

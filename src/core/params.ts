@@ -197,7 +197,7 @@ export function registerFxDef(def: FxDef, first = false) {
 
 export function fxDefaults(type: FxType): Record<string, number> {
   const o: Record<string, number> = {};
-  for (const p of FX_DEFS[type].params) o[p.key] = p.def;
+  for (const p of FX_DEFS[type]?.params ?? []) o[p.key] = p.def;
   return o;
 }
 

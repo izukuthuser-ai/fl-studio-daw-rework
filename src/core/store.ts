@@ -245,14 +245,31 @@ export class Store extends Emitter<StoreEvents> {
     if (keys.length) this.emit('ui', keys);
   }
 
+  /**
+   * Channels that were swapped for a new id (Replace instrument). Undo/redo map UI references
+   * (selection, piano roll, settings) across the swap instead of dropping them.
+   */
+  private idAlias = new Map<ID, ID>();
+  aliasChannel(a: ID, b: ID) {
+    this.idAlias.set(a, b);
+    this.idAlias.set(b, a);
+  }
+  private liveChannel(id: ID | null): ID | null {
+    if (!id) return null;
+    const has = (x: ID) => this.project.channels.some((c) => c.id === x);
+    if (has(id)) return id;
+    const alt = this.idAlias.get(id);
+    return alt && has(alt) ? alt : null;
+  }
+
   /** Make sure UI references still exist after undo/load. */
   validateUI() {
     const p = this.project;
     if (!p.patterns.find((x) => x.id === this.ui.currentPattern)) this.ui.currentPattern = p.patterns[0]?.id ?? '';
-    this.ui.selectedChannels = this.ui.selectedChannels.filter((id) => p.channels.some((c) => c.id === id));
+    this.ui.selectedChannels = [...new Set(this.ui.selectedChannels.map((id) => this.liveChannel(id)).filter((x): x is ID => !!x))];
     if (!this.ui.selectedChannels.length && p.channels[0]) this.ui.selectedChannels = [p.channels[0].id];
     if (this.ui.pianoRollChannel && !p.channels.some((c) => c.id === this.ui.pianoRollChannel))
-      this.ui.pianoRollChannel = this.ui.selectedChannels[0] ?? null;
+      this.ui.pianoRollChannel = this.liveChannel(this.ui.pianoRollChannel) ?? this.ui.selectedChannels[0] ?? null;
     if (this.ui.selectedMixer >= p.mixer.length) this.ui.selectedMixer = 0;
     const src = this.ui.plSource;
     if (src) {
@@ -261,7 +278,7 @@ export class Store extends Emitter<StoreEvents> {
       if (!ok) this.ui.plSource = p.patterns[0] ? { kind: 'pattern', ref: p.patterns[0].id } : null;
     }
     if (this.ui.editAutomation && !p.automations.some((a) => a.id === this.ui.editAutomation)) this.ui.editAutomation = null;
-    if (this.ui.settingsChannel && !p.channels.some((c) => c.id === this.ui.settingsChannel)) this.ui.settingsChannel = null;
+    if (this.ui.settingsChannel && !p.channels.some((c) => c.id === this.ui.settingsChannel)) this.ui.settingsChannel = this.liveChannel(this.ui.settingsChannel);
   }
 
   // ---------- queries ----------

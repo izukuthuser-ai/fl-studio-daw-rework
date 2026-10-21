@@ -32,6 +32,12 @@ export class MixerStrip {
   fxSig = '';
   dest: AudioNode | null = null;
   destKey = '';
+  /** Total processing delay of this insert's effects (seconds). */
+  get latency() {
+    let l = 0;
+    for (const e of this.effects) l += e.latency;
+    return l;
+  }
 
   constructor(private ctx: BaseAudioContext, public id: ID, meters: boolean) {
     this.input = ctx.createGain();
@@ -100,10 +106,15 @@ export class ChannelStrip {
   vol: GainNode;
   pan: StereoPannerNode;
   mute: GainNode;
+  /** Plugin delay compensation: delays this channel so every insert path reaches the master together. */
+  pdc: DelayNode;
+  pdcSec = 0;
   destId = '';
   /** Plugin instrument host (Halcyon, Rune, …) when the channel is a plugin channel. */
   host: InstrumentHost | null = null;
   hostType = '';
+  /** Macro params that playlist automation may have touched (reset to "follow the knob" when it stops). */
+  macroTouched = new Set<string>();
   constructor(ctx: BaseAudioContext, public id: ID) {
     this.input = ctx.createGain();
     this.filter = kBiquad(ctx);
@@ -112,12 +123,14 @@ export class ChannelStrip {
     this.vol = ctx.createGain();
     this.pan = ctx.createStereoPanner();
     this.mute = ctx.createGain();
-    this.input.connect(this.filter).connect(this.vol).connect(this.pan).connect(this.mute);
+    this.pdc = ctx.createDelay(2);
+    this.pdc.delayTime.value = 0;
+    this.input.connect(this.filter).connect(this.vol).connect(this.pan).connect(this.mute).connect(this.pdc);
   }
   dispose() {
     this.host?.dispose();
     this.host = null;
-    for (const n of [this.input, this.filter, this.vol, this.pan, this.mute]) {
+    for (const n of [this.input, this.filter, this.vol, this.pan, this.mute, this.pdc]) {
       try {
         n.disconnect();
       } catch {}
@@ -147,6 +160,8 @@ export class AudioGraph {
   private monoLast = new Map<ID, { key: number; voice: Voice | null }>();
   project!: Project;
   automated = new Set<string>();
+  /** Longest insert → master latency (seconds). Every channel is delayed so it arrives this late. */
+  pdcTotal = 0;
 
   /** Offline export: don't build mixer inserts that nothing audible feeds. */
   prune = false;
@@ -221,11 +236,23 @@ export class AudioGraph {
       setSmooth(ctx, s.mute.gain, t.mute || anySolo ? 0 : 1, 0.005);
       if (i === 0) s.connectTo(this.out, 'out');
       else {
-        let r = t.route;
-        if (r < 0 || r >= order.length || r === i || !order[r]) r = 0;
+        const r = this.routeOf(p, i);
         s.connectTo(order[r].input, order[r].id);
       }
     });
+    // ---- plugin delay compensation: latency from each insert's input to the master output ----
+    const pathLat = order.map((s, i) => {
+      if (!s) return 0;
+      let tot = 0;
+      let cur = i;
+      for (let guard = 0; guard < 256; guard++) {
+        tot += order[cur]?.latency ?? 0;
+        if (cur === 0) break;
+        cur = this.routeOf(p, cur);
+      }
+      return tot;
+    });
+    this.pdcTotal = Math.max(0, ...pathLat);
     // ---- channels ----
     const liveCh = new Set<ID>();
     for (const c of p.channels) {
@@ -247,11 +274,32 @@ export class AudioGraph {
         cs.filter.Q.value = 0.7;
       }
       this.syncHost(c, cs, p.bpm);
-      const dest = order[c.mixer] ?? this.master;
+      if (cs.host) {
+        for (let i = 1; i <= 4; i++) {
+          const key = 'macro' + i;
+          if (k(key)) {
+            cs.macroTouched.add(key);
+            continue;
+          }
+          if (!cs.macroTouched.delete(key)) continue;
+          const ap = cs.host.params.get(key);
+          if (!ap) continue;
+          // automation stopped or its clip was removed: hand the macro back to its knob
+          ap.cancelScheduledValues(0);
+          ap.setValueAtTime(-1, ctx.currentTime);
+        }
+      } else cs.macroTouched.clear();
+      const destIdx = order[c.mixer] ? c.mixer : 0;
+      const dest = order[destIdx] ?? this.master;
       if (cs.destId !== dest.id) {
-        cs.mute.disconnect();
-        cs.mute.connect(dest.input);
+        cs.pdc.disconnect();
+        cs.pdc.connect(dest.input);
         cs.destId = dest.id;
+      }
+      const comp = Math.min(1.9, Math.max(0, this.pdcTotal - pathLat[destIdx]));
+      if (Math.abs(comp - cs.pdcSec) > 1e-7) {
+        cs.pdcSec = comp;
+        cs.pdc.delayTime.value = comp;
       }
     }
     for (const [id, cs] of this.channels) if (!liveCh.has(id)) {
@@ -259,6 +307,13 @@ export class AudioGraph {
       this.channels.delete(id);
     }
     this.hostBpm = p.bpm;
+  }
+
+  /** Insert index that mixer track `i` routes to (invalid / self routes fall back to the master). */
+  private routeOf(p: Project, i: number) {
+    let r = p.mixer[i]?.route ?? 0;
+    if (r < 0 || r >= this.stripOrder.length || r === i || !this.stripOrder[r]) r = 0;
+    return r;
   }
 
   private hostBpm = 0;
@@ -278,6 +333,7 @@ export class AudioGraph {
         cs.host = new WorkletInstrumentHost(this.ctx, plug.processor, c.plugin!.state, bpm);
         cs.host.output.connect(cs.input);
         cs.hostType = plug.id;
+        cs.macroTouched.clear();
       } catch (e) {
         // worklet module not loaded yet — retried on the next sync
         cs.host = null;
@@ -322,14 +378,14 @@ export class AudioGraph {
     const pitch = (ch.pitch ?? 0) + (this.project?.masterPitch ?? 0);
     if (ch.type === 'synth' && ch.synth) return this.synthVoice(ch, strip, key, vel, pan, when, dur, pitch);
     if (ch.type === 'sampler' && ch.sampler) return this.samplerVoice(ch, strip, key, vel, pan, when, dur, pitch);
-    if (ch.type === 'plugin' && strip.host) return this.pluginVoice(ch, strip.host, key, vel, when, dur, pitch);
+    if (ch.type === 'plugin' && strip.host) return this.pluginVoice(ch, strip.host, key, vel, pan, when, dur, pitch);
     return null;
   }
 
-  private pluginVoice(ch: Channel, host: InstrumentHost, key: number, vel: number, when: number, dur: number | null, pitch: number): Voice {
+  private pluginVoice(ch: Channel, host: InstrumentHost, key: number, vel: number, pan: number, when: number, dur: number | null, pitch: number): Voice {
     const ctx = this.ctx;
     const t0 = Math.max(when, ctx.currentTime);
-    const h = host.noteOn(key + pitch, vel, t0, dur);
+    const h = host.noteOn(key + pitch, vel, t0, dur, clamp(pan || 0, -1, 1));
     const voice: Voice = {
       channelId: ch.id,
       key,
@@ -621,6 +677,7 @@ export class AudioGraph {
 
   click(when: number, accent: boolean) {
     const ctx = this.ctx;
+    when += this.pdcTotal; // in time with the (delay-compensated) music
     const o = ctx.createOscillator();
     const g = ctx.createGain();
     o.frequency.value = accent ? 1760 : 1180;
@@ -661,7 +718,7 @@ export class AudioGraph {
       for (const s of this.stripOrder) {
         for (const e of s.effects) {
           if (e.slot.id !== t.id) continue;
-          const def = FX_DEFS[e.slot.type].params.find((d) => d.key === t.param);
+          const def = FX_DEFS[e.slot.type]?.params.find((d) => d.key === t.param);
           const ap = e.autoParam(t.param);
           if (!def || !ap) return null;
           return { param: ap.param, def, map: ap.map };

@@ -156,8 +156,8 @@ export function describeTarget(t: AutoTarget): { name: string; def: ParamDef | n
   for (const m of p.mixer)
     for (const f of m.fx)
       if (f.id === t.id) {
-        const def = FX_DEFS[f.type].params.find((d) => d.key === t.param) ?? null;
-        return { name: `${m.name} ${FX_DEFS[f.type].name} ${def?.label ?? t.param}`, def, value: f.params[t.param] ?? def?.def ?? 0 };
+        const def = FX_DEFS[f.type]?.params.find((d) => d.key === t.param) ?? null;
+        return { name: `${m.name} ${FX_DEFS[f.type]?.name ?? f.type} ${def?.label ?? t.param}`, def, value: f.params[t.param] ?? def?.def ?? 0 };
       }
   return { name: 'Unknown', def: null, value: 0 };
 }
@@ -194,19 +194,23 @@ export function createAutomation(t: AutoTarget) {
 
 /** Turn recorded input takes into audio-clip channels + playlist clips (FL: routed to the recording insert). */
 export function placeRecordedAudio(takes: import('../audio/input').RecordedTake[]) {
+  if (!takes.length) return;
   const p = store.project;
   const spt = 60 / (p.bpm * 96);
-  for (const t of takes) {
-    const len = Math.max(1, Math.round(t.seconds / spt));
-    const chId = addChannel('sampler', { sampleRef: t.ref, name: t.name, audioClip: true, group: 'Audio', mixer: t.track }, false);
-    store.commit('Record audio', (pr) => {
-      let track = pr.playlist.tracks.findIndex((_, i) => !pr.playlist.clips.some((c) => c.track === i && c.start < t.startTick + len && c.start + c.len > t.startTick));
+  // one undo step for the whole take: audio-clip channels + playlist clips together
+  store.commit(takes.length > 1 ? 'Record audio (' + takes.length + ' tracks)' : 'Record audio', (pr) => {
+    for (const t of takes) {
+      const len = Math.max(1, Math.round(t.seconds / spt));
+      const ch = newChannel('sampler', { sampleRef: t.ref, name: t.name, audioClip: true, group: 'Audio', mixer: t.track, color: paletteColor(pr.channels.length * 3 + 1) }, pr.channels.length);
+      pr.channels.push(ch);
+      // like FL: the take goes on the first playlist track that is completely empty (a new one if none)
+      let track = pr.playlist.tracks.findIndex((_, i) => !pr.playlist.clips.some((c) => c.track === i));
       if (track < 0) {
         pr.playlist.tracks.push(newTrack(pr.playlist.tracks.length));
         track = pr.playlist.tracks.length - 1;
       }
-      pr.playlist.clips.push({ id: uid('k'), kind: 'audio', ref: chId, track, start: t.startTick, len, offset: 0 });
-    });
-  }
+      pr.playlist.clips.push({ id: uid('k'), kind: 'audio', ref: ch.id, track, start: t.startTick, len, offset: 0 });
+    }
+  });
   if (takes.length) toast(`Recorded ${takes.length} audio clip${takes.length > 1 ? 's' : ''} into the Playlist`, 'ok');
 }

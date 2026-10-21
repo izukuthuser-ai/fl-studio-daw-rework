@@ -4,8 +4,8 @@
 export type HostMsg =
   /** Replace the whole patch (sent on creation via processorOptions too). */
   | { t: 'state'; state: any }
-  /** Note on. `dur` (seconds) schedules the matching note-off; omit for held notes. */
-  | { t: 'on'; id: number; key: number; vel: number; time: number; dur?: number }
+  /** Note on. `dur` (seconds) schedules the matching note-off; omit for held notes. `pan` = note pan −1..1. */
+  | { t: 'on'; id: number; key: number; vel: number; time: number; dur?: number; pan?: number }
   /** Note off (enter release) for voice `id`. */
   | { t: 'off'; id: number; time: number }
   /** Hard stop of voice `id` with a ~5 ms fade. */

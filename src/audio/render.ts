@@ -3,7 +3,7 @@ import { ID, Project, STEP } from '../core/types';
 import { patternLen, secPerTick, songLen } from '../core/timing';
 import { AudioGraph } from './graph';
 import { ensureWorklets } from './plugins/registry';
-import { createEffect } from './effects';
+import { measureNodeLatency } from './latency';
 import { samples } from './samples';
 import { automatedTargets, scheduleSpan, startMidClips } from './sequencer';
 
@@ -16,33 +16,6 @@ export interface RenderOpts {
   onlyTracks?: number[]; // render specific mixer tracks (stems); undefined = full mix
 }
 
-/**
- * Latency of the master FX chain (e.g. a limiter's look-ahead) in samples, measured by sending an
- * impulse through the same effects offline. Exports are shifted by this so they start on the grid.
- */
-async function masterLatency(project: Project, sr: number): Promise<number> {
-  const slots = project.mixer[0]?.fx.filter((f) => f.enabled) ?? [];
-  if (!slots.length) return 0;
-  const ctx = new OfflineAudioContext(2, Math.ceil(sr * 0.25), sr);
-  await ensureWorklets(ctx);
-  const imp = ctx.createBuffer(1, 64, sr);
-  imp.getChannelData(0)[0] = 0.25;
-  const src = ctx.createBufferSource();
-  src.buffer = imp;
-  let prev: AudioNode = src;
-  for (const s of slots) {
-    const e = createEffect(ctx, s, project.bpm);
-    prev.connect(e.input);
-    prev = e.output;
-  }
-  prev.connect(ctx.destination);
-  src.start(0);
-  const out = await ctx.startRendering();
-  const d = out.getChannelData(0);
-  for (let i = 0; i < d.length; i++) if (Math.abs(d[i]) > 0.02) return i;
-  return 0;
-}
-
 export async function renderProject(project: Project, o: RenderOpts): Promise<AudioBuffer> {
   // make sure every sample is decoded
   const refs = project.channels.map((c) => c.sampler?.sampleRef).filter(Boolean) as string[];
@@ -53,9 +26,11 @@ export async function renderProject(project: Project, o: RenderOpts): Promise<Au
   const end = o.range?.end ?? (o.mode === 'song' ? songLen(project) : patternLen(project.patterns.find((p) => p.id === o.patternId), project.timeSig));
   const lead = 0; // exports start exactly on the grid
   const dur = (end - start) * spt + o.tail + lead;
-  const latency = await masterLatency(project, o.sampleRate).catch(() => 0);
   const outLen = Math.ceil(dur * o.sampleRate);
-  const ctx = new OfflineAudioContext(2, outLen + latency, o.sampleRate);
+  // room for plugin delay compensation (the whole mix arrives `g.pdcTotal` late; trimmed below)
+  const margin = Math.ceil(o.sampleRate * 0.5);
+  await measureNodeLatency(o.sampleRate);
+  const ctx = new OfflineAudioContext(2, outLen + margin, o.sampleRate);
   await ensureWorklets(ctx);
   const g = new AudioGraph(ctx, samples, false);
   g.prune = true;
@@ -119,8 +94,8 @@ export async function renderProject(project: Project, o: RenderOpts): Promise<Au
     });
   }
   const rendered = await ctx.startRendering();
-  if (!latency) return rendered;
-  // drop the master chain's look-ahead so the export starts exactly on the grid
+  // drop the effects' look-ahead (delay compensation) so the export starts exactly on the grid
+  const latency = Math.min(margin, Math.round(g.pdcTotal * o.sampleRate));
   const buf = new AudioBuffer({ length: outLen, numberOfChannels: rendered.numberOfChannels, sampleRate: rendered.sampleRate });
   for (let c = 0; c < rendered.numberOfChannels; c++) buf.copyToChannel(rendered.getChannelData(c).subarray(latency, latency + outLen), c);
   return buf;

@@ -391,6 +391,11 @@ export function sanitizeProject(raw: any): Project {
   p.playlist = { tracks: raw.playlist?.tracks ?? base.playlist.tracks, clips: raw.playlist?.clips ?? [] };
   p.automations = p.automations ?? [];
   if (!p.mixer?.length) p.mixer = base.mixer;
-  p.mixer = p.mixer.map((m: MixerTrack, i: number) => ({ ...newMixerTrack(i), ...m, fx: (m.fx ?? []).filter((f) => FX_DEFS[f.type]) }));
+  // effects this build doesn't know (newer version / missing plugin) are kept as-is and pass audio through
+  p.mixer = p.mixer.map((m: MixerTrack, i: number) => ({
+    ...newMixerTrack(i),
+    ...m,
+    fx: (Array.isArray(m.fx) ? m.fx : []).filter((f) => f && typeof f.type === 'string' && typeof f.id === 'string').map((f) => ({ ...f, enabled: f.enabled !== false, mix: typeof f.mix === 'number' ? f.mix : 1, params: f.params && typeof f.params === 'object' ? f.params : {} })),
+  }));
   return p;
 }

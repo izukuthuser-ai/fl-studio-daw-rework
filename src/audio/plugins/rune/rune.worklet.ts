@@ -181,6 +181,7 @@ class Voice {
   fade = 1;
   age = 0;
   uniPos = 0;
+  notePan = 0; // piano-roll note pan, added to the amp pan
   rand = 0;
   pitch = 60;
   target = 60;
@@ -510,9 +511,11 @@ class RuneProcessor extends InstrumentProcessor {
   }
 
   // ======================= notes =======================
-  protected noteOn(id: number, key: number, vel: number) {
+  private notePan = 0;
+  protected noteOn(id: number, key: number, vel: number, pan = 0) {
     if (!this.ready) return;
     this.idle = 0;
+    this.notePan = pan;
     if (this.arpOn) this.arpAdd(id, key, vel);
     else this.engineOn(id, key, vel);
   }
@@ -703,7 +706,8 @@ class RuneProcessor extends InstrumentProcessor {
         lf.fade = this.lFade[l] > 0 ? 0 : 1;
       }
       // pan / gain start values
-      const p = clamp(this.P[P_APAN] + (U > 1 ? v.uniPos * this.P[P_USPREAD] : 0), -1, 1);
+      v.notePan = this.notePan;
+      const p = clamp(this.P[P_APAN] + v.notePan + (U > 1 ? v.uniPos * this.P[P_USPREAD] : 0), -1, 1);
       v.panL = Math.cos((p + 1) * 0.7853981633974483) * 1.4142135623730951;
       v.panR = Math.sin((p + 1) * 0.7853981633974483) * 1.4142135623730951;
       this.lastVoice = v;
@@ -846,7 +850,11 @@ class RuneProcessor extends InstrumentProcessor {
   protected render(out: Float32Array[], from: number, to: number, macros: number[]) {
     if (!this.ready) return;
     const mac = this.mac;
-    for (let i = 0; i < 4; i++) mac[i] = Math.min(1, Math.max(0, this.P[P_MACRO + i] + (macros[i] ?? 0)));
+    // playlist automation (>= 0) replaces the knob value; negative = not automated
+    for (let i = 0; i < 4; i++) {
+      const m = macros[i] ?? -1;
+      mac[i] = Math.min(1, Math.max(0, m >= 0 ? m : this.P[P_MACRO + i]));
+    }
     if (this.idle > this.sr * 2 && !this.arpRun) {
       let anyVoice = false;
       for (const v of this.voices)
@@ -1141,7 +1149,7 @@ class RuneProcessor extends InstrumentProcessor {
       f1 = Math.max(0, f0 - n / (0.005 * sr));
       v.fade = f1;
     }
-    const p = Math.min(1, Math.max(-1, P[P_APAN] + (this.unison > 1 ? v.uniPos * P[P_USPREAD] : 0) + dst[D_APAN]));
+    const p = Math.min(1, Math.max(-1, P[P_APAN] + v.notePan + (this.unison > 1 ? v.uniPos * P[P_USPREAD] : 0) + dst[D_APAN]));
     const pl1 = Math.cos((p + 1) * 0.7853981633974483) * 1.4142135623730951;
     const pr1 = Math.sin((p + 1) * 0.7853981633974483) * 1.4142135623730951;
     const pl0 = v.panL, pr0 = v.panR;

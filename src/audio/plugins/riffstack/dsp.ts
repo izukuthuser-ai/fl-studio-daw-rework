@@ -7,6 +7,8 @@ import { MODELS, type AmpModelDef } from './models';
 export const OS = 4;
 const TAPS = 128; // polyphase FIR length at the oversampled rate (32 taps per phase)
 const PH = TAPS / OS;
+/** Latency of the oversampling (up + down FIR, linear phase) in base-rate samples. */
+export const RS_LATENCY = Math.round((TAPS - 1) / OS);
 
 /** AudioParam-driven (automatable) keys: [min, max, default]. Keep in sync with params.ts. */
 export const AUTO_RANGES: Record<string, [number, number, number]> = {

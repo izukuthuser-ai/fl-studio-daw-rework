@@ -41,9 +41,9 @@ export class WorkletInstrumentHost implements InstrumentHost {
     this.node.port.postMessage(m);
   }
 
-  noteOn(key: number, vel: number, when: number, dur: number | null): InstrumentVoiceHandle {
+  noteOn(key: number, vel: number, when: number, dur: number | null, pan = 0): InstrumentVoiceHandle {
     const id = nextVoiceId++;
-    this.send(dur === null ? { t: 'on', id, key, vel, time: when } : { t: 'on', id, key, vel, time: when, dur });
+    this.send(dur === null ? { t: 'on', id, key, vel, time: when, pan } : { t: 'on', id, key, vel, time: when, dur, pan });
     return {
       release: (w: number) => this.send({ t: 'off', id, time: Math.max(w, this.ctx.currentTime) }),
       kill: (w: number) => this.send({ t: 'kill', id, time: Math.max(w, this.ctx.currentTime) }),
