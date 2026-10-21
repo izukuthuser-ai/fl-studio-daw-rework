@@ -24,13 +24,16 @@ export async function renderProject(project: Project, o: RenderOpts): Promise<Au
   const spt = secPerTick(project.bpm);
   const start = o.range?.start ?? 0;
   const end = o.range?.end ?? (o.mode === 'song' ? songLen(project) : patternLen(project.patterns.find((p) => p.id === o.patternId), project.timeSig));
-  const lead = 0; // exports start exactly on the grid
-  const dur = (end - start) * spt + o.tail + lead;
-  const outLen = Math.ceil(dur * o.sampleRate);
+  // Silent pre-roll (whole render quanta) so compressors / limiters have settled before the first note
+  // (their start-up transient would soften the first hit); it's trimmed off, so exports start on the grid.
+  const leadN = Math.ceil((0.25 * o.sampleRate) / 128) * 128;
+  const lead = leadN / o.sampleRate;
+  const outLen = Math.ceil(((end - start) * spt + o.tail) * o.sampleRate);
+  const dur = lead + outLen / o.sampleRate;
   // room for plugin delay compensation (the whole mix arrives `g.pdcTotal` late; trimmed below)
   const margin = Math.ceil(o.sampleRate * 0.5);
   await measureNodeLatency(o.sampleRate);
-  const ctx = new OfflineAudioContext(2, outLen + margin, o.sampleRate);
+  const ctx = new OfflineAudioContext(2, leadN + outLen + margin, o.sampleRate);
   await ensureWorklets(ctx);
   const g = new AudioGraph(ctx, samples, false);
   g.prune = true;
@@ -95,7 +98,7 @@ export async function renderProject(project: Project, o: RenderOpts): Promise<Au
   }
   const rendered = await ctx.startRendering();
   // drop the effects' look-ahead (delay compensation) so the export starts exactly on the grid
-  const latency = Math.min(margin, Math.round(g.pdcTotal * o.sampleRate));
+  const latency = leadN + Math.min(margin, Math.round(g.pdcTotal * o.sampleRate));
   const buf = new AudioBuffer({ length: outLen, numberOfChannels: rendered.numberOfChannels, sampleRate: rendered.sampleRate });
   for (let c = 0; c < rendered.numberOfChannels; c++) buf.copyToChannel(rendered.getChannelData(c).subarray(latency, latency + outLen), c);
   return buf;

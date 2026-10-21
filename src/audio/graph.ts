@@ -256,7 +256,10 @@ export class AudioGraph {
     // unused insert or a live-input-only insert doesn't delay everything else
     let pdc = pathLat[0] ?? 0;
     for (const c of p.channels) pdc = Math.max(pdc, pathLat[order[c.mixer] ? c.mixer : 0] ?? 0);
-    this.pdcTotal = pdc;
+    // whole render quanta: the master bus then always sees the same block alignment, so adding (or
+    // bypassing) a latency effect on an insert can't change how block-based dynamics react
+    const q = 128 / ctx.sampleRate;
+    this.pdcTotal = pdc > 0 ? Math.ceil(pdc / q - 1e-6) * q : 0;
     // ---- channels ----
     const liveCh = new Set<ID>();
     for (const c of p.channels) {
