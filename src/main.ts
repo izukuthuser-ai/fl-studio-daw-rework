@@ -23,6 +23,11 @@ import { toast } from './ui/widgets';
 import { PanelDef } from './ui/panel';
 import { renderProject } from './audio/render';
 import { placeRecordedAudio } from './ui/ops';
+import { samples } from './audio/samples';
+import { ensureWorklets } from './audio/plugins/registry';
+import { createEffect } from './audio/effects';
+import { encodeWav } from './audio/render';
+import { openPluginWindow, openFxWindow } from './ui/pluginWindow';
 import { WindowId } from './core/types';
 
 async function boot() {
@@ -100,7 +105,7 @@ async function boot() {
   });
 
   if (!recovered && !launch) toast('Demo song loaded — Space plays the pattern, L switches to Song mode · F1 = shortcuts', 'info', 5000);
-  (window as any).__lf = { store, engine, wm, hooks, renderProject };
+  (window as any).__lf = { store, engine, wm, hooks, renderProject, samples, ensureWorklets, createEffect, encodeWav, openPluginWindow, openFxWindow };
 }
 
 boot().catch((e) => {
