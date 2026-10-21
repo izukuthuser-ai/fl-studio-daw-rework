@@ -230,6 +230,18 @@ export function setArmed(indices: number[], armed: boolean) {
   });
 }
 
+/** Set (or clear with '') the live audio input of tracks. The engine opens / closes devices to match. */
+export function setInput(indices: number[], dev: string) {
+  store.commit(dev ? 'Mixer track input' : 'Remove mixer track input', (p) => {
+    for (const i of indices) {
+      const t = p.mixer[i];
+      if (!t) continue;
+      if (dev) t.input = dev;
+      else delete t.input;
+    }
+  });
+}
+
 export function toggleMute(i: number) {
   if (!store.project.mixer[i]) return;
   store.commit('Mute mixer track', (p) => (p.mixer[i].mute = !p.mixer[i].mute));
