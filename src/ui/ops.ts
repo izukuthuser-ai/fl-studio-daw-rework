@@ -9,7 +9,7 @@ import { samples } from '../audio/samples';
 import { BUILTIN_BY_ID } from '../audio/sounds';
 import { FxType } from '../core/types';
 
-export function addChannel(type: 'sampler' | 'synth', opts: Partial<Channel> & { sampleRef?: string; preset?: string } = {}, select = true): ID {
+export function addChannel(type: 'sampler' | 'synth' | 'plugin', opts: Partial<Channel> & { sampleRef?: string; preset?: string; pluginType?: string } = {}, select = true): ID {
   const idx = store.project.channels.length;
   const ch = newChannel(type, { color: paletteColor(idx * 3 + 1), ...opts }, idx);
   if (ch.type === 'sampler' && ch.sampler?.sampleRef && !opts.name) ch.name = samples.displayName(ch.sampler.sampleRef);
@@ -190,4 +190,23 @@ export function createAutomation(t: AutoTarget) {
   });
   store.setUI({ plSource: { kind: 'automation', ref: id } });
   toast(`Automation clip "${d.name}" created on track ${track + 1} — drag points in the Playlist (Song mode plays it)`, 'ok', 4000);
+}
+
+/** Turn recorded input takes into audio-clip channels + playlist clips (FL: routed to the recording insert). */
+export function placeRecordedAudio(takes: import('../audio/input').RecordedTake[]) {
+  const p = store.project;
+  const spt = 60 / (p.bpm * 96);
+  for (const t of takes) {
+    const len = Math.max(1, Math.round(t.seconds / spt));
+    const chId = addChannel('sampler', { sampleRef: t.ref, name: t.name, audioClip: true, group: 'Audio', mixer: t.track }, false);
+    store.commit('Record audio', (pr) => {
+      let track = pr.playlist.tracks.findIndex((_, i) => !pr.playlist.clips.some((c) => c.track === i && c.start < t.startTick + len && c.start + c.len > t.startTick));
+      if (track < 0) {
+        pr.playlist.tracks.push(newTrack(pr.playlist.tracks.length));
+        track = pr.playlist.tracks.length - 1;
+      }
+      pr.playlist.clips.push({ id: uid('k'), kind: 'audio', ref: chId, track, start: t.startTick, len, offset: 0 });
+    });
+  }
+  if (takes.length) toast(`Recorded ${takes.length} audio clip${takes.length > 1 ? 's' : ''} into the Playlist`, 'ok');
 }

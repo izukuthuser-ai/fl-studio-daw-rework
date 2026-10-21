@@ -189,6 +189,16 @@ export class WindowManager {
     return w;
   }
 
+  /** Remove a (dynamic) window entirely. */
+  remove(id: WindowId) {
+    const w = this.wins.get(id);
+    if (!w) return;
+    if (w.visible) w.hide();
+    w.root.remove();
+    this.wins.delete(id);
+    this.emitChange();
+  }
+
   get(id: WindowId) {
     return this.wins.get(id);
   }

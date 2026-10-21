@@ -6,6 +6,9 @@ import { CHANNEL_PARAMS, FX_DEFS, MIXER_PARAMS, ParamDef, fromNorm } from '../co
 import { Effect, WidthNode, createEffect } from './effects';
 import { SampleBank } from './samples';
 import { kBiquad } from './nodes';
+import { getInstrument } from './plugins/registry';
+import { WorkletInstrumentHost } from './plugins/workletHost';
+import type { InstrumentHost } from './plugins/api';
 
 const isOffline = (ctx: BaseAudioContext) => typeof OfflineAudioContext !== 'undefined' && ctx instanceof OfflineAudioContext;
 
@@ -98,6 +101,9 @@ export class ChannelStrip {
   pan: StereoPannerNode;
   mute: GainNode;
   destId = '';
+  /** Plugin instrument host (Halcyon, Rune, …) when the channel is a plugin channel. */
+  host: InstrumentHost | null = null;
+  hostType = '';
   constructor(ctx: BaseAudioContext, public id: ID) {
     this.input = ctx.createGain();
     this.filter = kBiquad(ctx);
@@ -109,6 +115,8 @@ export class ChannelStrip {
     this.input.connect(this.filter).connect(this.vol).connect(this.pan).connect(this.mute);
   }
   dispose() {
+    this.host?.dispose();
+    this.host = null;
     for (const n of [this.input, this.filter, this.vol, this.pan, this.mute]) {
       try {
         n.disconnect();
@@ -125,6 +133,7 @@ export interface Voice {
   cutGroup: number;
   release(when: number): void;
   kill(when: number): void;
+  plugin?: boolean; // voice lives inside a plugin worklet (no onended)
 }
 
 export class AudioGraph {
@@ -218,6 +227,7 @@ export class AudioGraph {
         if (!k('cutoff')) setSmooth(ctx, cs.filter.frequency, 20000);
         cs.filter.Q.value = 0.7;
       }
+      this.syncHost(c, cs, p.bpm);
       const dest = order[c.mixer] ?? this.master;
       if (cs.destId !== dest.id) {
         cs.mute.disconnect();
@@ -229,6 +239,47 @@ export class AudioGraph {
       cs.dispose();
       this.channels.delete(id);
     }
+    this.hostBpm = p.bpm;
+  }
+
+  private hostBpm = 0;
+  private syncHost(c: Channel, cs: ChannelStrip, bpm: number) {
+    const plug = c.type === 'plugin' ? getInstrument(c.plugin?.type) : undefined;
+    if (!plug) {
+      if (cs.host) {
+        cs.host.dispose();
+        cs.host = null;
+        cs.hostType = '';
+      }
+      return;
+    }
+    if (!cs.host || cs.hostType !== plug.id) {
+      cs.host?.dispose();
+      try {
+        cs.host = new WorkletInstrumentHost(this.ctx, plug.processor, c.plugin!.state, bpm);
+        cs.host.output.connect(cs.input);
+        cs.hostType = plug.id;
+      } catch (e) {
+        // worklet module not loaded yet — retried on the next sync
+        cs.host = null;
+        cs.hostType = '';
+      }
+      return;
+    }
+    cs.host.setState(c.plugin!.state);
+    if (bpm !== this.hostBpm) cs.host.setTempo(bpm);
+  }
+
+  /** All live plugin hosts. */
+  hosts(): InstrumentHost[] {
+    const out: InstrumentHost[] = [];
+    for (const cs of this.channels.values()) if (cs.host) out.push(cs.host);
+    return out;
+  }
+
+  /** Resolve once every plugin processor has handled all queued messages (offline export). */
+  syncHosts(): Promise<void> {
+    return Promise.all(this.hosts().map((h) => h.sync())).then(() => undefined);
   }
 
   setMonitorVolume(v: number) {
@@ -252,7 +303,35 @@ export class AudioGraph {
     const pitch = (ch.pitch ?? 0) + (this.project?.masterPitch ?? 0);
     if (ch.type === 'synth' && ch.synth) return this.synthVoice(ch, strip, key, vel, pan, when, dur, pitch);
     if (ch.type === 'sampler' && ch.sampler) return this.samplerVoice(ch, strip, key, vel, pan, when, dur, pitch);
+    if (ch.type === 'plugin' && strip.host) return this.pluginVoice(ch, strip.host, key, vel, when, dur, pitch);
     return null;
+  }
+
+  private pluginVoice(ch: Channel, host: InstrumentHost, key: number, vel: number, when: number, dur: number | null, pitch: number): Voice {
+    const ctx = this.ctx;
+    const t0 = Math.max(when, ctx.currentTime);
+    const h = host.noteOn(key + pitch, vel, t0, dur);
+    const voice: Voice = {
+      channelId: ch.id,
+      key,
+      start: t0,
+      end: dur === null ? Infinity : t0 + dur + 3,
+      cutGroup: 0,
+      plugin: true,
+      release: (w: number) => {
+        h.release(w);
+        voice.end = Math.max(w, ctx.currentTime) + 3;
+      },
+      kill: (w: number) => {
+        h.kill(w);
+        voice.end = Math.max(w, ctx.currentTime) + 0.02;
+      },
+    };
+    // prune finished plugin voices (they have no onended callback)
+    const now = ctx.currentTime;
+    for (const v of this.voices) if (v.plugin && v.end < now) this.voices.delete(v);
+    this.voices.add(voice);
+    return voice;
   }
 
   private register(v: Voice, endNode: AudioScheduledSourceNode, nodes: AudioNode[] = []) {
@@ -497,10 +576,16 @@ export class AudioGraph {
   stopAll(hard = false) {
     const t = this.ctx.currentTime;
     for (const v of this.voices) {
+      if (v.plugin) continue;
       if (v.start > t) v.kill(t);
       else if (hard) v.kill(t);
       else v.release(t);
     }
+    for (const h of this.hosts()) {
+      h.cancelAfter(t);
+      h.allOff(t, hard);
+    }
+    for (const v of this.voices) if (v.plugin) this.voices.delete(v);
     if (hard) this.voices.clear();
     this.monoLast.clear();
   }
@@ -509,9 +594,10 @@ export class AudioGraph {
   cancelFuture() {
     const t = this.ctx.currentTime;
     for (const v of this.voices) if (v.start > t + 0.001) {
-      v.kill(t);
+      if (!v.plugin) v.kill(t);
       this.voices.delete(v);
     }
+    for (const h of this.hosts()) h.cancelAfter(t + 0.001);
   }
 
   click(when: number, accent: boolean) {
@@ -538,6 +624,8 @@ export class AudioGraph {
       if (t.param === 'vol') return { param: cs.vol.gain, def, map: chanVolToGain };
       if (t.param === 'pan') return { param: cs.pan.pan, def, map: (v) => v };
       if (t.param === 'cutoff') return { param: cs.filter.frequency, def, map: (v) => v };
+      const hp = cs.host?.params.get(t.param);
+      if (hp) return { param: hp, def, map: (v) => v };
       return null;
     }
     if (t.scope === 'mixer' || t.scope === 'master') {

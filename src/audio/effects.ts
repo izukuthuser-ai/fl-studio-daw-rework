@@ -579,7 +579,8 @@ class WidthFx extends Effect {
   }
 }
 
-const CLASSES: Record<FxType, new (ctx: BaseAudioContext, slot: FxSlot, bpm: number) => Effect> = {
+type EffectCtor = new (ctx: BaseAudioContext, slot: FxSlot, bpm: number) => Effect;
+const CLASSES: Partial<Record<FxType, EffectCtor>> = {
   eq: EqFx,
   compressor: CompressorFx,
   limiter: LimiterFx,
@@ -592,6 +593,26 @@ const CLASSES: Record<FxType, new (ctx: BaseAudioContext, slot: FxSlot, bpm: num
   width: WidthFx,
 };
 
+/** Plugins register their Effect subclass here (e.g. the Riffstack amp rack). */
+export function registerEffectClass(type: FxType, ctor: EffectCtor) {
+  CLASSES[type] = ctor;
+}
+
+class PassthroughFx extends Effect {
+  constructor(ctx: BaseAudioContext, slot: FxSlot, bpm: number) {
+    super(ctx, slot, bpm);
+    this.input.connect(this.wet);
+    this.init();
+  }
+  protected apply() {}
+}
+
 export function createEffect(ctx: BaseAudioContext, slot: FxSlot, bpm: number): Effect {
-  return new CLASSES[slot.type](ctx, slot, bpm);
+  const C = CLASSES[slot.type];
+  try {
+    return C ? new C(ctx, slot, bpm) : new PassthroughFx(ctx, slot, bpm);
+  } catch (e) {
+    console.error('Effect failed to start', slot.type, e);
+    return new PassthroughFx(ctx, slot, bpm);
+  }
 }

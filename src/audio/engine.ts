@@ -6,6 +6,8 @@ import { patternLen, secPerTick, songLen } from '../core/timing';
 import { AudioGraph, Voice } from './graph';
 import { samples } from './samples';
 import { automatedTargets, scheduleSpan, startMidClips } from './sequencer';
+import { ensureWorklets } from './plugins/registry';
+import { AudioInputManager, RecordedTake } from './input';
 import { Emitter } from '../core/util';
 
 const LOOKAHEAD = 0.12;
@@ -20,11 +22,12 @@ interface Held {
   recTime: number;
 }
 
-type EngineEvents = { state: null; recorded: null };
+type EngineEvents = { state: null; recorded: null; audioRecorded: RecordedTake[] };
 
 export class Engine extends Emitter<EngineEvents> {
   ctx!: AudioContext;
   graph!: AudioGraph;
+  inputs!: AudioInputManager;
   ready = false;
   playing = false;
   paused = false;
@@ -45,19 +48,29 @@ export class Engine extends Emitter<EngineEvents> {
   private meterBuf = new Float32Array(512);
   peakHold: number[][] = [];
 
-  init() {
-    if (this.ready) return;
+  private initPromise: Promise<void> | null = null;
+  /** Creates the AudioContext, loads plugin worklets, builds the graph. Safe to call repeatedly. */
+  init(): Promise<void> {
+    if (!this.initPromise) this.initPromise = this.doInit();
+    return this.initPromise;
+  }
+
+  private async doInit() {
     const AC: typeof AudioContext = (window as any).AudioContext || (window as any).webkitAudioContext;
     this.ctx = new AC({ latencyHint: 'interactive' });
     samples.decodeCtx = this.ctx;
     samples.sampleRate = this.ctx.sampleRate;
+    await ensureWorklets(this.ctx);
     this.graph = new AudioGraph(this.ctx, samples, true);
     this.graph.sync(store.project);
     this.graph.setMonitorVolume(store.ui.masterVol);
     this.curBpm = store.project.bpm;
     this.ready = true;
+    this.inputs = new AudioInputManager(this.ctx, this.graph);
+    this.inputs.sync(store.project);
     store.on('project', () => {
       this.graph.sync(store.project);
+      this.inputs.sync(store.project);
       const bpm = store.project.bpm;
       if (bpm !== this.curBpm) {
         // position must be computed with the tempo the current anchors were laid with
@@ -127,7 +140,10 @@ export class Engine extends Emitter<EngineEvents> {
   }
 
   play(fromInput = false) {
-    if (!this.ready) this.init();
+    if (!this.ready) {
+      this.init().then(() => this.play(fromInput));
+      return;
+    }
     if (this.ctx.state !== 'running') this.ctx.resume();
     const ui = store.ui;
     this.curBpm = store.project.bpm;
@@ -157,6 +173,8 @@ export class Engine extends Emitter<EngineEvents> {
     this.takeIds.clear();
     this.takeGroup = 'take' + Date.now();
     if (this.mode === 'song') startMidClips(this.graph, store.project, pos, time0, this.spt);
+    // audio recording of armed mixer inputs lands in the playlist at the song position
+    if (ui.recording) this.inputs.startRecording(store.project, time0, this.mode === 'song' ? pos : this.songStart);
     this.playing = true;
     this.paused = false;
     clearInterval(this.timer);
@@ -176,6 +194,7 @@ export class Engine extends Emitter<EngineEvents> {
       this.graph.stopAll();
       this.graph.automated.clear();
       this.graph.sync(store.project);
+      if (this.inputs.recording) this.inputs.stopRecording().then((takes) => takes.length && this.emit('audioRecorded', takes));
     }
     this.finishHeldRecording();
     if (was) this.emit('state', null);
@@ -269,12 +288,18 @@ export class Engine extends Emitter<EngineEvents> {
   // ---------------- live input ----------------
   private targetChannel(channelId?: ID): Channel | undefined {
     if (channelId) return store.channel(channelId) ?? store.selectedChannel;
-    if (store.ui.focused === 'pianoroll') return store.pianoChannel;
+    const f = store.ui.focused ?? '';
+    if (f === 'pianoroll') return store.pianoChannel;
+    // a focused plugin window plays its own channel (FL behaviour)
+    if (f.startsWith('plugin:')) return store.channel(f.slice(7)) ?? store.selectedChannel;
     return store.selectedChannel;
   }
 
   noteOn(key: number, vel = 0.78, channelId?: ID, holdId?: string) {
-    if (!this.ready) this.init();
+    if (!this.ready) {
+      this.init();
+      return;
+    }
     if (this.ctx.state !== 'running') this.ctx.resume();
     const ch = this.targetChannel(channelId);
     if (!ch) return;
@@ -356,7 +381,10 @@ export class Engine extends Emitter<EngineEvents> {
 
   /** Audition a single note for a fixed duration (piano keys, note draw). */
   preview(channelId: ID, key: number, vel = 0.78, dur = 0.25) {
-    if (!this.ready) this.init();
+    if (!this.ready) {
+      this.init();
+      return;
+    }
     if (this.ctx.state !== 'running') this.ctx.resume();
     const ch = store.channel(channelId);
     if (!ch) return;
@@ -365,7 +393,7 @@ export class Engine extends Emitter<EngineEvents> {
 
   private previewSrc: AudioBufferSourceNode | null = null;
   async previewSample(ref: string) {
-    if (!this.ready) this.init();
+    if (!this.ready) await this.init();
     if (this.ctx.state !== 'running') this.ctx.resume();
     this.stopPreview();
     const b = await samples.ensure(ref);

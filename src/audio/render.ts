@@ -2,6 +2,7 @@
 import { ID, Project, STEP } from '../core/types';
 import { patternLen, secPerTick, songLen } from '../core/timing';
 import { AudioGraph } from './graph';
+import { ensureWorklets } from './plugins/registry';
 import { samples } from './samples';
 import { automatedTargets, scheduleSpan, startMidClips } from './sequencer';
 
@@ -25,6 +26,7 @@ export async function renderProject(project: Project, o: RenderOpts): Promise<Au
   const lead = 0.01;
   const dur = (end - start) * spt + o.tail + lead;
   const ctx = new OfflineAudioContext(2, Math.ceil(dur * o.sampleRate), o.sampleRate);
+  await ensureWorklets(ctx);
   const g = new AudioGraph(ctx, samples, false);
   let proj = project;
   if (o.onlyTracks) {
@@ -74,10 +76,14 @@ export async function renderProject(project: Project, o: RenderOpts): Promise<Au
   const WINDOW = 0.5;
   scheduleUntil(WINDOW * 2);
   const quantum = 128 / o.sampleRate;
+  const plugins = g.hosts().length > 0;
+  // plugin worklets receive notes by message: make sure they have them before rendering past them
+  if (plugins) ctx.suspend(quantum).then(() => g.syncHosts().then(() => ctx.resume()));
   for (let s = WINDOW; s < dur - WINDOW; s += WINDOW) {
     const at = Math.round(s / quantum) * quantum;
-    ctx.suspend(at).then(() => {
+    ctx.suspend(at).then(async () => {
       scheduleUntil(at + WINDOW * 2);
+      if (plugins) await g.syncHosts();
       ctx.resume();
     });
   }

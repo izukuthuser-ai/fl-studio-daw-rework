@@ -1,4 +1,5 @@
 import './styles.css';
+import './audio/plugins';
 import { store } from './core/store';
 import { defaultUI, demoProject } from './core/project';
 import { el } from './core/util';
@@ -21,6 +22,7 @@ import { initPluginPicker } from './ui/pluginPicker';
 import { toast } from './ui/widgets';
 import { PanelDef } from './ui/panel';
 import { renderProject } from './audio/render';
+import { placeRecordedAudio } from './ui/ops';
 import { WindowId } from './core/types';
 
 async function boot() {
@@ -28,7 +30,8 @@ async function boot() {
   initDialogs();
   const p = demoProject();
   store.load(p, defaultUI(p));
-  engine.init();
+  await engine.init();
+  engine.on('audioRecorded', (takes) => placeRecordedAudio(takes));
 
   const workspace = el('div', { id: 'workspace' });
   const app = document.getElementById('app')!;

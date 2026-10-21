@@ -6,6 +6,7 @@ import { deepClone, paletteColor, uid } from './util';
 import { FX_DEFS, fxDefaults, toNorm, FX_DEFS as D } from './params';
 import { BUILTIN_BY_ID } from '../audio/sounds';
 import { samples } from '../audio/samples';
+import { getInstrument } from '../audio/plugins/registry';
 
 export function defaultSampler(ref: string | null = null, name = '(empty)'): SamplerParams {
   const b = ref?.startsWith('builtin:') ? BUILTIN_BY_ID.get(ref.slice(8)) : undefined;
@@ -110,11 +111,12 @@ export function synthPreset(name: string): SynthParams {
   return s;
 }
 
-export function newChannel(type: 'sampler' | 'synth', opts: Partial<Channel> & { sampleRef?: string; preset?: string } = {}, index = 0): Channel {
-  const { sampleRef, preset, ...rest } = opts;
+export function newChannel(type: 'sampler' | 'synth' | 'plugin', opts: Partial<Channel> & { sampleRef?: string; preset?: string; pluginType?: string } = {}, index = 0): Channel {
+  const { sampleRef, preset, pluginType, ...rest } = opts;
+  const plug = type === 'plugin' ? getInstrument(pluginType ?? opts.plugin?.type) : undefined;
   const ch: Channel = {
     id: uid('c'),
-    name: type === 'synth' ? preset ?? 'Tri-Osc' : 'Sampler',
+    name: type === 'synth' ? preset ?? 'Tri-Osc' : type === 'plugin' ? (preset && preset !== 'Init' ? preset : plug?.name ?? 'Plugin') : 'Sampler',
     type,
     color: paletteColor(index + 6),
     vol: 0.78,
@@ -128,6 +130,11 @@ export function newChannel(type: 'sampler' | 'synth', opts: Partial<Channel> & {
   if (type === 'sampler') {
     ch.sampler = defaultSampler(sampleRef ?? null, sampleRef ? samples.displayName(sampleRef) : undefined);
     if (!opts.name && ch.sampler.sampleRef) ch.name = ch.sampler.sampleName;
+  } else if (type === 'plugin') {
+    if (!ch.plugin) {
+      const pr = preset ? plug?.presets().find((x) => x.name === preset) : undefined;
+      ch.plugin = { type: plug?.id ?? pluginType ?? 'unknown', state: deepClone(pr?.state ?? plug?.defaultState() ?? {}), preset: pr?.name ?? 'Init' };
+    }
   } else ch.synth = synthPreset(preset ?? 'Init');
   return ch;
 }
@@ -350,6 +357,11 @@ export function sanitizeProject(raw: any): Project {
   p.bpm = Number(p.bpm) || 140;
   if (!Array.isArray(p.timeSig) || p.timeSig.length !== 2) p.timeSig = [4, 4];
   p.channels = (p.channels ?? []).map((c: Channel) => {
+    if (c.type === 'plugin') {
+      const plug = getInstrument(c.plugin?.type);
+      const d = newChannel('plugin', { pluginType: c.plugin?.type });
+      return { ...d, ...c, plugin: { type: c.plugin?.type ?? 'unknown', state: { ...(plug?.defaultState() ?? {}), ...(c.plugin?.state ?? {}) }, preset: c.plugin?.preset } };
+    }
     const d = newChannel(c.type === 'synth' ? 'synth' : 'sampler');
     const out: Channel = { ...d, ...c };
     if (out.type === 'sampler') out.sampler = { ...defaultSampler(), ...(c.sampler ?? {}) };

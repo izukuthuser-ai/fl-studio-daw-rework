@@ -14,6 +14,8 @@ import { DT_FX, DT_PRESET, DT_SAMPLE, setDragData } from './dnd';
 import { modal } from './widgets';
 import { wm } from './wm';
 import { ICONS } from './icons';
+import { allInstruments } from '../audio/plugins/registry';
+import { openPluginWindow } from './pluginWindow';
 import { BR, CAT_COLOR, CAT_ICON, FX_COLOR, FX_ICON, SAMPLER_COLOR, SAMPLER_ICON, SYNTH_COLOR, WAVE_ICON } from './browser-icons';
 
 const MAX_FX_SLOTS = 10;
@@ -36,6 +38,23 @@ interface Item {
 function buildItems(): Item[] {
   const items: Item[] = [];
   const toRack = () => wm.show('channelrack');
+  for (const pl of allInstruments()) {
+    items.push({
+      key: 'plug:' + pl.id,
+      group: 'synth',
+      name: pl.name,
+      desc: pl.desc,
+      icon: pl.icon,
+      color: pl.color,
+      keywords: `${pl.name} ${pl.desc} plugin instrument synth ${pl.presets().map((x) => x.name).join(' ')}`,
+      hint: `${pl.name} — ${pl.desc}. Click or Enter adds it to the Channel rack and opens it`,
+      pick: () => {
+        const id = addChannel('plugin', { pluginType: pl.id, group: 'Synths' });
+        toRack();
+        openPluginWindow(id, 'show');
+      },
+    });
+  }
   for (const p of SYNTH_PRESETS) {
     const wave = synthPreset(p.name).osc.find((o) => o.level > 0)?.wave ?? 'sawtooth';
     items.push({

@@ -1,5 +1,5 @@
 // LoopForge Studio — Electron main process
-const { app, BrowserWindow, ipcMain, dialog, Menu, shell } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog, Menu, shell, session } = require('electron');
 const path = require('path');
 const fs = require('fs');
 
@@ -78,6 +78,10 @@ function createWindow() {
 }
 
 app.whenReady().then(() => {
+  // audio input (guitar / mic) and MIDI keyboards
+  const allowed = new Set(['media', 'midi', 'midiSysex', 'audioCapture']);
+  session.defaultSession.setPermissionRequestHandler((_wc, permission, cb) => cb(allowed.has(permission)));
+  session.defaultSession.setPermissionCheckHandler((_wc, permission) => allowed.has(permission));
   pendingOpen = pendingOpen || projectArg(process.argv);
   createWindow();
   app.on('activate', () => {

@@ -55,7 +55,7 @@ export interface FxDef {
   defaultMix: number;
 }
 
-export const FX_DEFS: Record<FxType, FxDef> = {
+export const FX_DEFS = {
   eq: {
     type: 'eq',
     name: 'Parametric EQ',
@@ -184,9 +184,16 @@ export const FX_DEFS: Record<FxType, FxDef> = {
       { key: 'monoBass', label: 'Mono bass', min: 0, max: 1, def: 0, step: 1, options: ['Off', 'On'] },
     ],
   },
-};
+} as Record<FxType, FxDef>;
+
 
 export const FX_ORDER: FxType[] = ['eq', 'compressor', 'limiter', 'reverb', 'delay', 'filter', 'distortion', 'bitcrusher', 'chorus', 'width'];
+
+/** Plugins register additional effects (e.g. the Riffstack amp rack) at startup. */
+export function registerFxDef(def: FxDef, first = false) {
+  (FX_DEFS as Record<string, FxDef>)[def.type] = def;
+  if (!FX_ORDER.includes(def.type)) first ? FX_ORDER.unshift(def.type) : FX_ORDER.push(def.type);
+}
 
 export function fxDefaults(type: FxType): Record<string, number> {
   const o: Record<string, number> = {};
@@ -200,6 +207,10 @@ export const CHANNEL_PARAMS: Record<string, ParamDef> = {
   pan: { key: 'pan', label: 'Panning', min: -1, max: 1, def: 0, fmt: (v) => (Math.abs(v) < 0.01 ? 'C' : Math.round(Math.abs(v) * 100) + (v < 0 ? 'L' : 'R')) },
   pitch: { key: 'pitch', label: 'Pitch', min: -24, max: 24, def: 0, unit: 'st' },
   cutoff: { key: 'cutoff', label: 'Filter cutoff', min: 40, max: 20000, def: 20000, curve: 'log', fmt: hz },
+  macro1: { key: 'macro1', label: 'Macro 1', min: 0, max: 1, def: 0, fmt: pct },
+  macro2: { key: 'macro2', label: 'Macro 2', min: 0, max: 1, def: 0, fmt: pct },
+  macro3: { key: 'macro3', label: 'Macro 3', min: 0, max: 1, def: 0, fmt: pct },
+  macro4: { key: 'macro4', label: 'Macro 4', min: 0, max: 1, def: 0, fmt: pct },
 };
 export const MIXER_PARAMS: Record<string, ParamDef> = {
   volDb: { key: 'volDb', label: 'Volume', min: -60, max: 5.6, def: 0, fmt: (v) => (v <= -60 ? '-inf dB' : db(v)) },

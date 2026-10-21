@@ -18,6 +18,7 @@ import { hooks, patternMenu } from './actions';
 import { DT_PRESET, DT_SAMPLE, hasType, pickSamples, readDrag, samplesFromDrop } from './dnd';
 import { wm } from './wm';
 import type { PanelDef } from './panel';
+import { openPluginWindow } from './pluginWindow';
 import {
   BASE_GROUPS,
   addSamplerChannel,
@@ -107,8 +108,7 @@ function toggleSelected(id: ID) {
 }
 
 function openSettings(id: ID) {
-  store.setUI({ settingsChannel: id });
-  wm.show('channelsettings');
+  openPluginWindow(id, 'show');
 }
 
 function openPianoRoll(id: ID) {

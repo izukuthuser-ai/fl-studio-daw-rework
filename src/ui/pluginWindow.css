@@ -1,0 +1,31 @@
+/* FL-style plugin wrapper */
+.pw { flex: 1; min-height: 0; display: flex; flex-direction: column; background: #2c3337; }
+.pw-strip { flex: none; display: flex; align-items: center; gap: 8px; height: 46px; padding: 0 10px; background: linear-gradient(#434c52, #383f44); border-bottom: 1px solid #1d2326; box-shadow: inset 0 1px 0 rgba(255,255,255,.08); }
+.pw-plugname { display: flex; align-items: center; gap: 6px; font-weight: 700; font-size: 13px; letter-spacing: .02em; color: var(--text); white-space: nowrap; }
+.pw-plugicon { display: flex; }
+.pw-plugicon svg { width: 18px; height: 18px; }
+.pw-sp { flex: 1; }
+.pw-strip .knob-label { font-size: 8px; font-weight: 700; letter-spacing: .06em; color: #b7c3ca; }
+.pw-track { display: flex; flex-direction: column; align-items: center; gap: 1px; }
+.pw-track .select { height: 20px; font-size: 11px; max-width: 130px; }
+.pw-lbl { font-size: 8px; font-weight: 700; letter-spacing: .06em; color: #b7c3ca; }
+.pw-ui { flex: 1; min-height: 0; overflow: auto; position: relative; display: flex; flex-direction: column; }
+.pw-ui > * { flex: 1; min-height: 0; }
+
+.pw-presets { display: flex; align-items: center; gap: 2px; margin-left: 6px; min-width: 0; }
+.pw-arrow { width: 18px; height: 18px; border: 1px solid #1d2326; border-radius: 2px; background: linear-gradient(#4a545a, #3c444a); color: #c9d3d9; font-size: 8px; cursor: pointer; padding: 0; }
+.pw-arrow:hover { color: #fff; }
+.pw-preset { display: flex; align-items: center; gap: 4px; height: 18px; min-width: 120px; max-width: 220px; padding: 0 4px 0 7px; border: 1px solid #1d2326; border-radius: 2px; background: #262d31; color: var(--text); cursor: pointer; font-size: 11px; }
+.pw-preset-name { flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; text-align: left; }
+.pw-caret { display: flex; color: var(--text-dim); }
+.pw-caret svg { width: 11px; height: 11px; }
+
+.pw-bypass { min-width: 38px; height: 20px; border-radius: 2px; border: 1px solid #1d2326; background: #2a3135; color: #77858e; font: 700 10px var(--mono); cursor: pointer; }
+.pw-bypass.on { background: linear-gradient(#a6ee7f, #6fbf4a); color: #142208; border-color: #3c6a28; }
+
+.pw-generic { padding: 12px 14px; display: flex; flex-direction: column; gap: 10px; }
+.pw-fxdesc { color: var(--text-dim); font-size: 11px; }
+.pw-fxgrid { display: flex; flex-wrap: wrap; gap: 14px 16px; align-items: flex-start; }
+.pw-fxgrid .knob-label { font-size: 10px; }
+.pw-fxsel { display: flex; flex-direction: column; gap: 3px; }
+.pw-fxsel label { font-size: 10px; }

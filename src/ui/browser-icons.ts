@@ -41,9 +41,11 @@ export const FX_COLOR: Record<FxType, string> = {
   filter: '#e8d24a',
   distortion: '#e8634a',
   bitcrusher: '#f06b9a',
+  riffstack: '#e8634a',
 };
 
 export const FX_ICON: Record<FxType, string> = {
+  riffstack: s('<rect x="3" y="6" width="18" height="12" rx="2"/><circle cx="8" cy="12" r="2.2"/><circle cx="16" cy="12" r="2.2"/><path d="M3 9h18"/>'),
   eq: s('<path d="M3 15c2.5 0 3.5-7 6-7s3 9 6 9 3-6 6-6"/><circle cx="9" cy="8" r="1.5" fill="currentColor"/><circle cx="15" cy="17" r="1.5" fill="currentColor"/>'),
   compressor: s('<path d="M4 4v16h16" opacity=".45"/><path d="M4 20l8-8c1.5-1.4 3-2 8-3.5"/>'),
   limiter: s('<path d="M3 5.5h18" stroke-dasharray="2 2.4"/><path d="M3 15l2.5-7.5h3l3 10 3-10h3L21 15"/>'),

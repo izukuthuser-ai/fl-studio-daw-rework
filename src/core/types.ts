@@ -63,7 +63,14 @@ export interface SynthParams {
   glide: number; // seconds (mono only)
 }
 
-export type InstrumentType = 'sampler' | 'synth';
+export type InstrumentType = 'sampler' | 'synth' | 'plugin';
+
+/** State of a plugin instrument (Halcyon, Rune, …). `type` is the plugin id from the registry. */
+export interface PluginInstance {
+  type: string;
+  state: any;
+  preset?: string;
+}
 
 export interface Channel {
   id: ID;
@@ -78,6 +85,7 @@ export interface Channel {
   group: string; // channel rack filter group
   sampler?: SamplerParams;
   synth?: SynthParams;
+  plugin?: PluginInstance;
   audioClip?: boolean; // created from an audio clip dropped on the playlist
 }
 
@@ -141,7 +149,8 @@ export type FxType =
   | 'distortion'
   | 'bitcrusher'
   | 'chorus'
-  | 'width';
+  | 'width'
+  | 'riffstack';
 
 export interface FxSlot {
   id: ID;
@@ -149,6 +158,8 @@ export interface FxSlot {
   enabled: boolean;
   mix: number; // 0..1 dry/wet
   params: Record<string, number>;
+  /** Optional non-numeric plugin state (e.g. preset name, rack layout). */
+  data?: any;
 }
 
 export interface MixerTrack {
@@ -162,6 +173,7 @@ export interface MixerTrack {
   armed: boolean;
   route: number; // destination track index; master = -1
   fx: FxSlot[];
+  input?: string; // '' = none, 'default' = system default input, otherwise a device id
 }
 
 export interface SongInfo {
@@ -186,14 +198,8 @@ export interface Project {
   mixer: MixerTrack[]; // [0] = master
 }
 
-export type WindowId =
-  | 'playlist'
-  | 'channelrack'
-  | 'pianoroll'
-  | 'mixer'
-  | 'browser'
-  | 'channelsettings'
-  | 'automation';
+/** Fixed window ids, plus dynamic plugin windows: `plugin:<channelId>` and `fx:<slotId>`. */
+export type WindowId = 'playlist' | 'channelrack' | 'pianoroll' | 'mixer' | 'browser' | 'channelsettings' | 'automation' | (string & {});
 
 export type ToolId = 'draw' | 'paint' | 'delete' | 'mute' | 'slice' | 'select' | 'zoom' | 'playback' | 'slip';
 

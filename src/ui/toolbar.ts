@@ -13,6 +13,8 @@ import { SYNTH_PRESETS } from '../core/project';
 import { addChannel, addMixerTrack, addPlaylistTrack } from './ops';
 import { wm } from './wm';
 import { BUILTIN_SOUNDS } from '../audio/sounds';
+import { allInstruments } from '../audio/plugins/registry';
+import { openPluginWindow } from './pluginWindow';
 import './toolbar.css';
 
 function menuDefs(): Record<string, () => MenuItem[]> {
@@ -40,6 +42,22 @@ function menuDefs(): Record<string, () => MenuItem[]> {
     ],
     EDIT: () => [{ cmd: 'edit.undo' }, { cmd: 'edit.undoStep' }, { cmd: 'edit.redo' }, { cmd: 'edit.history' }, { sep: true }, { cmd: 'win.palette' }],
     ADD: () => [
+      ...allInstruments().map((pl) => ({
+        label: pl.name,
+        submenu: [
+          ...[...new Set(pl.presets().map((x) => x.category))].map((cat) => ({
+            label: cat,
+            submenu: pl.presets().filter((x) => x.category === cat).map((x) => ({
+              label: x.name,
+              action: () => {
+                const id = addChannel('plugin', { pluginType: pl.id, preset: x.name, group: 'Synths' });
+                wm.show('channelrack');
+                openPluginWindow(id, 'show');
+              },
+            })),
+          })),
+        ],
+      })),
       { label: 'Tri-Osc Synth', submenu: SYNTH_PRESETS.map((p) => ({ label: p.name, action: () => { addChannel('synth', { name: p.name === 'Init' ? 'Tri-Osc' : p.name, preset: p.name, group: 'Synths' }); wm.show('channelrack'); } })) },
       {
         label: 'Sampler',
