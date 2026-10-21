@@ -63,7 +63,11 @@ function channelApi(channelId: string): PluginUIApi {
     noteOn: (key, vel = 0.8) => engine.noteOn(key, vel, channelId, 'pw:' + key),
     noteOff: (key) => engine.noteOff(key, channelId, 'pw:' + key),
     automate: (param) => createAutomation({ scope: 'channel', id: channelId, param }),
-    onExternalChange: (fn) => store.on('project', () => fn()),
+    // only while the channel still exists as a plugin channel (undo of "Add channel" removes it)
+    onExternalChange: (fn) =>
+      store.on('project', () => {
+        if (store.channel(channelId)?.plugin) fn();
+      }),
     bpm: () => store.project.bpm,
   };
 }
@@ -214,7 +218,8 @@ export function openPluginWindow(channelId: string, mode: 'toggle' | 'show' = 't
     const cs = wm.get('channelsettings');
     const same = store.ui.settingsChannel === channelId;
     store.setUI({ settingsChannel: channelId });
-    if (mode === 'toggle' && cs?.visible && same && store.ui.focused === 'channelsettings') cs.hide();
+    // FL: clicking the channel button closes the window when it's already open for that channel
+    if (mode === 'toggle' && cs?.visible && same) cs.hide();
     else wm.show('channelsettings');
     return;
   }
@@ -224,8 +229,9 @@ export function openPluginWindow(channelId: string, mode: 'toggle' | 'show' = 't
     return;
   }
   const id = 'plugin:' + channelId;
-  const w = wm.get(id) ?? buildInstrumentWindow(channelId, plug);
-  if (mode === 'toggle') wm.toggle(id);
+  const existing = wm.get(id);
+  const w = existing ?? buildInstrumentWindow(channelId, plug);
+  if (mode === 'toggle' && existing?.visible) w.hide();
   else w.show();
 }
 
@@ -263,7 +269,10 @@ function fxApi(slotId: string): FxPluginUIApi {
       return null;
     },
     automate: (param) => createAutomation({ scope: 'fx', id: slotId, param }),
-    onExternalChange: (fn) => store.on('project', () => fn()),
+    onExternalChange: (fn) =>
+      store.on('project', () => {
+        if (findSlot(slotId)) fn();
+      }),
   };
 }
 
@@ -362,9 +371,10 @@ function buildFxWindow(slotId: string) {
 /** Open (or toggle) the window of a mixer effect slot. */
 export function openFxWindow(slotId: string, mode: 'toggle' | 'show' = 'toggle') {
   const id = 'fx:' + slotId;
-  const w = wm.get(id) ?? buildFxWindow(slotId);
+  const existing = wm.get(id);
+  const w = existing ?? buildFxWindow(slotId);
   if (!w) return;
-  if (mode === 'toggle') wm.toggle(id);
+  if (mode === 'toggle' && existing?.visible) w.hide();
   else w.show();
 }
 

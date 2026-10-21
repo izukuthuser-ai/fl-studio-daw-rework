@@ -1,7 +1,7 @@
-// Original track-header icons for the Playlist (24x24, currentColor) and the per-track icon choice.
-// PlaylistTrack has no icon field yet, so the choice lives in a local map keyed by track id
-// (localStorage); 'auto' derives an icon from the track's first clip.
+// Original track-header icons for the Playlist (24x24, currentColor) and the per-track icon choice
+// (PlaylistTrack.icon, saved with the project and undoable); 'auto' derives an icon from the track's first clip.
 import type { Project, ID } from '../core/types';
+import { store } from '../core/store';
 
 const s = (d: string, sw = 1.8) => `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="${sw}" stroke-linecap="round" stroke-linejoin="round">${d}</svg>`;
 
@@ -35,15 +35,25 @@ function load(): Record<ID, string> {
 
 /** The user's choice for a track: an icon id, 'none', or 'auto' (default). */
 export function trackIconChoice(trackId: ID): string {
+  // saved in the project (PlaylistTrack.icon); older local-only choices are still honoured
+  const t = store.project?.playlist.tracks.find((x) => x.id === trackId);
+  if (t?.icon) return t.icon;
   return load()[trackId] ?? 'auto';
 }
 export function setTrackIcon(trackId: ID, icon: string) {
+  store.commit('Track icon', (p) => {
+    const t = p.playlist.tracks.find((x) => x.id === trackId);
+    if (!t) return;
+    if (icon === 'auto') delete t.icon;
+    else t.icon = icon;
+  });
   const m = load();
-  if (icon === 'auto') delete m[trackId];
-  else m[trackId] = icon;
-  try {
-    localStorage.setItem(KEY, JSON.stringify(m));
-  } catch {}
+  if (m[trackId]) {
+    delete m[trackId];
+    try {
+      localStorage.setItem(KEY, JSON.stringify(m));
+    } catch {}
+  }
 }
 
 /** Guess an icon from a name ("Kick", "808 Bass", "Chords", "Vox"…). */

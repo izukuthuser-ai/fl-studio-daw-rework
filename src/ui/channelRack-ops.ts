@@ -12,7 +12,7 @@ import { allInstruments, getInstrument } from '../audio/plugins/registry';
 import type { DragSample } from './dnd';
 
 /** Browser drag of an instrument plugin: JSON { pluginType }. (Shared constant belongs in dnd.ts.) */
-export const DT_PLUGIN = 'application/x-loopforge-plugin';
+export { DT_PLUGIN } from './dnd';
 
 export const STEP_KEY = 60;
 export const STEP_VEL = 0.78;
