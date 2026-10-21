@@ -15,10 +15,13 @@ A pattern-based desktop DAW that works like FL Studio — **same workflow, same 
 | Piano Roll | F7 | Every FL piano-roll shortcut, ghost notes, velocity/pan lane, quantize/arp/strum/chop/flam/limit/flip/randomize dialogs, scale highlight + snap-to-scale, chord stamps |
 | Plugin picker | F8 | Instruments and effects, fuzzy search |
 | Browser | Alt+F8 | 27 built-in sounds, synth presets, your folders, favourites, fuzzy search |
-| Mixer | F9 | Unlimited inserts, routing, 10 FX slots per track, meters, solo/mute, stem render |
+| Mixer | F9 | Unlimited inserts, routing arrows, 10 FX slots per track, live audio input + arm, EQ graph, meters, solo/mute, stem render |
 
-- **Instruments:** Sampler (one-shot or ADSR, filter, reverse, cut groups) and Tri-Osc Synth (3 oscillators, unison, filter envelope, mono/glide, 9 presets).
-- **Effects:** Parametric EQ, Compressor, Limiter, Reverb, Delay (tempo-synced ping-pong), Filter + LFO, Distortion, Bitcrusher, Chorus, Stereo Width.
+- **Halcyon — wavetable synth:** 3 morphing wavetable oscillators (12 generated tables, 9 warp modes, 16-voice unison), sub + noise, 2 filters, 3 envelopes, 4 LFOs with custom shapes, 16-slot mod matrix, macros, FX; 32 presets.
+- **Rune — analog-style poly synth:** 3 oscillators (analog, supersaw, FM, PM, chip, noise, vector), 2 filters (ladder, SVF, SEM, K-35, diode, comb, formant, ring), mod matrix, arpeggiator/step sequencer, glide/legato/unison, FX; 33 presets.
+- **Riffstack — guitar amp rack:** noise gate, tuner, compressor/wah/fuzz/overdrive pedals, 6 amp models from clean to **Molten Core** (metal) and **Razor** (djent), procedurally generated 1x12–4x12 cabinets with movable mic, EQ, delay, reverb; 16 presets.
+- **Also:** Sampler, Tri-Osc Synth, and 10 mixer effects (EQ, compressor, limiter, reverb, delay, filter, distortion, bitcrusher, chorus, stereo width). Plugins open in FL-style plugin windows with presets and channel controls; 4 macros per synth are automatable from the playlist.
+- **Guitar / mic input & recording:** pick an input on any mixer insert (Mixer → top of the right panel) to play live through its effects — e.g. your guitar through Riffstack. Arm the insert, press Record and Play, and the take lands in the Playlist routed to that insert.
 - **Export:** WAV 16/24/32-float at 44.1/48/96 kHz (song or pattern), MIDI export/import, per-track stems.
 - **Projects:** `.lfproj` (JSON), optional embedded samples, autosave + crash recovery.
 
@@ -50,13 +53,14 @@ Building the Windows `.exe` on Linux needs Wine (`wine64` + `wine32`); on Window
 ```
 electron/        main process (window, native dialogs, safe file IPC) + preload
 src/core/        data model, undoable store, commands/keymap, params, MIDI, timing
-src/audio/       Web Audio engine: look-ahead scheduler, instruments, mixer graph, effects, offline export
+src/audio/       Web Audio engine: look-ahead scheduler, instruments, mixer graph, effects, offline export, audio input
+src/audio/plugins/  Halcyon, Rune, Riffstack (AudioWorklet DSP + UIs) and the plugin registry
 src/ui/          toolbar, window manager, and one module per window (playlist, channelRack, pianoRoll, mixer, browser…)
 PROMPT.md        the master build prompt / spec this app was built from
 docs/            architecture notes and screenshot
 ```
 
-See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for how the pieces fit together.
+See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for how the pieces fit together and [`docs/PLUGINS.md`](docs/PLUGINS.md) for writing plugins.
 
 ## License
 MIT
