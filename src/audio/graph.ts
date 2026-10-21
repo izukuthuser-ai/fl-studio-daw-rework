@@ -252,7 +252,11 @@ export class AudioGraph {
       }
       return tot;
     });
-    this.pdcTotal = Math.max(0, ...pathLat);
+    // only paths that channels (notes, audio clips) actually feed count — a high-latency effect on an
+    // unused insert or a live-input-only insert doesn't delay everything else
+    let pdc = pathLat[0] ?? 0;
+    for (const c of p.channels) pdc = Math.max(pdc, pathLat[order[c.mixer] ? c.mixer : 0] ?? 0);
+    this.pdcTotal = pdc;
     // ---- channels ----
     const liveCh = new Set<ID>();
     for (const c of p.channels) {

@@ -74,10 +74,10 @@ export class WorkletInstrumentHost implements InstrumentHost {
     return new Promise((res) => {
       this.waiters.set(n, res);
       this.send({ t: 'sync', n });
-      // never hang an export if a processor misbehaves
+      // never hang an export if a processor misbehaves (generous: a busy machine can be slow to answer)
       setTimeout(() => {
         if (this.waiters.delete(n)) res();
-      }, 2000);
+      }, 10000);
     });
   }
 

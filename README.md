@@ -15,7 +15,7 @@ A pattern-based desktop DAW that works like FL Studio — **same workflow, same 
 | Piano Roll | F7 | Every FL piano-roll shortcut, ghost notes, velocity/pan lane, quantize/arp/strum/chop/flam/limit/flip/randomize dialogs, scale highlight + snap-to-scale, chord stamps |
 | Plugin picker | F8 | Instruments and effects, fuzzy search |
 | Browser | Alt+F8 | 27 built-in sounds, synth presets, your folders, favourites, fuzzy search |
-| Mixer | F9 | Unlimited inserts, routing arrows, 10 FX slots per track, live audio input + arm, EQ graph, meters, solo/mute, stem render |
+| Mixer | F9 | Unlimited inserts, routing arrows, 10 FX slots per track, automatic plugin delay compensation, live audio input + arm, EQ graph, meters, solo/mute, stem render |
 
 - **Halcyon — wavetable synth:** 3 morphing wavetable oscillators (12 generated tables, 9 warp modes, 16-voice unison), sub + noise, 2 filters, 3 envelopes, 4 LFOs with custom shapes, 16-slot mod matrix, macros, FX; 32 presets.
 - **Rune — analog-style poly synth:** 3 oscillators (analog, supersaw, FM, PM, chip, noise, vector), 2 filters (ladder, SVF, SEM, K-35, diode, comb, formant, ring), mod matrix, arpeggiator/step sequencer, glide/legato/unison, FX; 33 presets.
@@ -33,7 +33,7 @@ Real multi-level undo (FL-classic toggle available) · command palette (Ctrl+K) 
 
 ## Run it
 
-**Windows:** run `LoopForge-Studio-Setup-0.1.0.exe` (installer), or `LoopForge-Studio-Portable-0.1.0.exe` (no install). The builds aren't code-signed, so Windows SmartScreen may warn the first time — choose *More info → Run anyway*.
+**Windows:** run `LoopForge-Studio-Setup-<version>.exe` (installer), or `LoopForge-Studio-Portable-<version>.exe` (no install). The builds aren't code-signed, so Windows SmartScreen may warn the first time — choose *More info → Run anyway*.
 
 **From source** (Node 20+):
 
