@@ -103,6 +103,7 @@ export interface PlaylistTrack {
   color: string;
   mute: boolean;
   height: number; // px at zoom 1
+  icon?: string; // optional header icon id (drum, bass, keys, synth, vocal, guitar, fx, automation)
 }
 
 export type ClipKind = 'pattern' | 'audio' | 'automation';

@@ -74,6 +74,20 @@ Menus: FILE, EDIT, ADD, PATTERNS, VIEW, OPTIONS, HELP. Transport: PAT/SONG toggl
 ### 7. Plugin picker (F8)
 Grid of instruments + effects; click or drag into Channel Rack / Mixer slot.
 
+## Look & feel — match FL Studio 21
+Use the user's FL 21 reference screenshots as the visual target: slate-grey windows, **two-row toolbar** (menus + transport + tempo + record options + big song-position display + monitor on row 1; hint/info panel, master pitch/volume, snap, pattern selector and window buttons on row 2), **browser with ALL · PROJECT · PLUGINS · LIBRARY · SOUNDS · STARRED tabs** and a TAGS search bar, channel rack with coloured channel buttons + green select LEDs + grey/red step groups, **playlist with a pattern picker column and colour-filled track headers**, piano roll with green notes / red selection, an overview strip and a "Control" lane, and a mixer of numbered inserts with **vertical track names**, thin meters, routing arrows and an FX-slot panel with input/output selectors. Every drawing, icon and name is original — no Image-Line artwork, logos or plugin names.
+
+## Plugins (original instruments & effects, AudioWorklet DSP)
+Plugins open in **FL-style plugin windows** (one floating window per channel / mixer slot; clicking a channel button toggles its window) with a wrapper strip: preset ◀ ▶ + browser + "save preset", channel PAN / VOL / PITCH and mixer TRACK. Instrument DSP runs in AudioWorkletProcessors so it works identically live and in offline export; 4 macro AudioParams per instrument are automatable from the playlist.
+
+- **Halcyon — wavetable synth** (inspired by the feature set of modern wavetable synths such as Vital): 3 wavetable oscillators with continuous frame morphing, up to 16-voice unison, warp modes, sub + noise; ≥10 procedurally generated wavetables; 2 routable filters (SVF/ladder/comb/formant); 3 envelopes, 4 LFOs (tempo sync, custom shapes); 12+ slot mod matrix; macros; distortion/chorus/delay/reverb; animated wavetable, filter, envelope and LFO displays; ≥28 presets.
+- **Rune — analog-style semi-modular poly** (inspired by the feature set of Odin 2): 3 oscillators (analog, multi/supersaw, FM, PM, chip, noise, vector), 2 filters (ladder, SVF, SEM, Korg35-style, diode, comb, formant, ring), amp + distortion, 3 envelopes, 4 LFOs, mod matrix, arpeggiator/sequencer, glide/legato/unison, chorus/phaser/flanger/delay/reverb; ≥28 presets.
+- **Riffstack — guitar amp & effects rack** (Guitar Rig-style concept): input gain + noise gate, tuner, overdrive/fuzz/compressor pedals, amp models from clean to **"Molten Core" high-gain metal** and **"Razor" djent** (oversampled tube-style stages, tone stack, presence/depth, tight/bright), procedurally generated cabinet IRs (1x12 … 4x12, mic position/distance), post EQ, delay, reverb, meters; ≥14 presets.
+- Existing: Sampler, Tri-Osc Synth, and the 10 mixer effects.
+
+## Audio input & recording
+Each mixer insert has an **input selector** (system inputs via getUserMedia with echo-cancellation/noise-suppression/AGC off) for live monitoring through its FX chain — plug in a guitar and play through Riffstack. **Arm** inserts and press Record + Play to capture takes sample-accurately with latency compensation; takes become audio clips on the playlist, routed to the insert they were recorded on (FL behaviour).
+
 ## Keyboard shortcuts (must match FL Studio)
 
 Shortcuts are context-sensitive: the focused window's map is checked first, then the global map. Single-letter shortcuts are disabled while Typing-keyboard-to-piano (Ctrl+T) is on.
@@ -255,3 +269,5 @@ JSON: `{ format: "loopforge", version, info{title,author,genre,comments}, bpm, t
 6. Ctrl+R exports a WAV that matches what you hear.
 7. Save, close, reopen → identical project.
 8. Undo/redo works for every edit.
+9. Halcyon, Rune and Riffstack load in plugin windows, every preset renders non-silent without clipping, and exports sound like playback.
+10. Selecting a mixer input + arming + Record captures a take into the playlist that lines up with the beat.

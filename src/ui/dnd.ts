@@ -7,6 +7,7 @@ export const DT_SAMPLE = 'application/x-loopforge-sample'; // JSON { ref, name }
 export const DT_PRESET = 'application/x-loopforge-preset'; // JSON { preset }
 export const DT_PATTERN = 'application/x-loopforge-pattern'; // JSON { id }
 export const DT_FX = 'application/x-loopforge-fx'; // JSON { type }
+export const DT_PLUGIN = 'application/x-loopforge-plugin'; // JSON { pluginType, preset? }
 
 export interface DragSample {
   ref: string;
