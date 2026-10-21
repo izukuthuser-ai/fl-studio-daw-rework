@@ -7,6 +7,7 @@ import { FX_DEFS, fxDefaults, toNorm, FX_DEFS as D } from './params';
 import { BUILTIN_BY_ID } from '../audio/sounds';
 import { samples } from '../audio/samples';
 import { getInstrument } from '../audio/plugins/registry';
+import { FACTORY as RS_FACTORY, presetParams as rsPresetParams } from '../audio/plugins/riffstack/presets';
 
 export function defaultSampler(ref: string | null = null, name = '(empty)'): SamplerParams {
   const b = ref?.startsWith('builtin:') ? BUILTIN_BY_ID.get(ref.slice(8)) : undefined;
@@ -216,8 +217,13 @@ export function demoProject(): Project {
   bass.sampler!.envEnabled = true;
   bass.sampler!.env = { a: 0.002, d: 0.3, s: 1, r: 0.12 };
   bass.sampler!.cutGroup = 2;
-  const pluck = newChannel('synth', { name: 'Pluck', preset: 'Square Pluck', mixer: 5, vol: 0.62, color: paletteColor(6), group: 'Synths' });
-  const pad = newChannel('synth', { name: 'Pad', preset: 'Warm Pad', mixer: 6, vol: 0.5, color: paletteColor(8), group: 'Synths' });
+  // showcase the bundled plugins when they're registered (falls back to Tri-Osc otherwise)
+  const pluck = getInstrument('halcyon')
+    ? newChannel('plugin', { name: 'Pluck', pluginType: 'halcyon', preset: 'Shimmer Pluck', mixer: 5, vol: 0.8, color: paletteColor(6), group: 'Synths' })
+    : newChannel('synth', { name: 'Pluck', preset: 'Square Pluck', mixer: 5, vol: 0.62, color: paletteColor(6), group: 'Synths' });
+  const pad = getInstrument('rune')
+    ? newChannel('plugin', { name: 'Pad', pluginType: 'rune', preset: 'Polar Pad', mixer: 6, vol: 0.62, color: paletteColor(8), group: 'Synths' })
+    : newChannel('synth', { name: 'Pad', preset: 'Warm Pad', mixer: 6, vol: 0.5, color: paletteColor(8), group: 'Synths' });
   p.channels.push(pluck, pad);
   const riser = ch('Noise Riser', 'riser', 7, 0.5, 10, { audioClip: true, group: 'Audio' });
   const impact = ch('Impact', 'impact', 7, 0.6, 10, { audioClip: true, group: 'Audio' });
@@ -254,6 +260,18 @@ export function demoProject(): Project {
   fxVerb.mix = 0.3;
   p.mixer[7].fx.push(fxVerb);
   p.mixer[7].volDb = -4;
+  // a guitar insert with the amp rack ready: pick an input on it in the Mixer, arm, and play
+  if (FX_DEFS.riffstack) {
+    const amp = newFx('riffstack');
+    const pr = RS_FACTORY.find((x) => x.name === 'Molten Core Rhythm');
+    if (pr) {
+      amp.params = { ...amp.params, ...rsPresetParams(pr) };
+      amp.data = { preset: pr.name };
+    }
+    p.mixer[8].name = 'Guitar';
+    p.mixer[8].color = '#c95f4f';
+    p.mixer[8].fx.push(amp);
+  }
 
   // Patterns
   const beat = newPattern(0, 'Beat');
