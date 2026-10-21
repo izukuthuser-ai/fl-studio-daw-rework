@@ -9,6 +9,7 @@ import { clamp, el } from '../core/util';
 import { MenuItem, knob, select, showMenu } from './widgets';
 import { createAutomation, createsLoop } from './ops';
 import { openFxWindow } from './pluginWindow';
+import { getFxUI } from '../audio/plugins/registry';
 import { engine } from '../audio/engine';
 import { DT_FX } from './dnd';
 import { EqView } from './mixer-eq';
@@ -295,6 +296,8 @@ export class FxPanel {
       { label: f.slot.enabled ? 'Bypass' : 'Enable', action: () => toggleFx(sid) },
       {
         label: open ? 'Hide controls in mixer' : 'Show controls in mixer',
+        // effects with their own editor (e.g. the Riffstack rack) only open in their window
+        disabled: !!getFxUI(f.slot.type) && !open,
         action: () => {
           if (open) this.expanded.delete(sid);
           else this.expanded.add(sid);
@@ -323,6 +326,9 @@ export class FxPanel {
   private editor(s: FxSlot): HTMLElement {
     const sid = s.id;
     const def = FX_DEFS[s.type];
+    if (getFxUI(s.type)) {
+      return el('div', { class: 'mx-fx-ed' }, el('button', { class: 'btn small', text: `Open ${def?.name ?? 'editor'}…`, onclick: () => openFxWindow(sid, 'show') }));
+    }
     const slot = () => findSlot(store.project, sid)?.slot;
     const grid = el('div', { class: 'mx-fx-ed' });
     for (const pd of def?.params ?? []) {

@@ -290,6 +290,7 @@ function fxApi(slotId: string): FxPluginUIApi {
       store.on('project', () => {
         if (findSlot(slotId)) fn();
       }),
+    bpm: () => store.project.bpm,
   };
 }
 

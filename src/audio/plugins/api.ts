@@ -92,6 +92,8 @@ export interface FxPluginUIApi {
   effect(): any;
   automate(param: string): void;
   onExternalChange(fn: () => void): () => void;
+  /** Current project tempo (for tempo-synced displays). */
+  bpm(): number;
 }
 
 export interface FxPluginUI {
