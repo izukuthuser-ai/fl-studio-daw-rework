@@ -41,6 +41,23 @@ function allPresets(plug: InstrumentPlugin): PluginPreset[] {
   return [...plug.presets(), ...userPresets(plug.id).map((p) => ({ ...p, category: 'User' }))];
 }
 
+/** Load a factory or user preset (by name) into a plugin channel — one undo step. */
+export function applyPluginPreset(channelId: string, presetName: string, label = 'Load preset'): boolean {
+  const c = store.channel(channelId);
+  const plug = getInstrument(c?.plugin?.type);
+  const pr = plug ? allPresets(plug).find((p) => p.name === presetName) : undefined;
+  if (!plug || !pr) return false;
+  store.commit(label, (p) => {
+    const ch = p.channels.find((x) => x.id === channelId);
+    if (!ch?.plugin) return;
+    const wasDefaultName = ch.name === ch.plugin.preset || ch.name === plug.name || ch.name === 'Init';
+    ch.plugin.state = deepClone(pr.state);
+    ch.plugin.preset = pr.name;
+    if (wasDefaultName) ch.name = pr.name === 'Init' ? plug.name : pr.name;
+  });
+  return true;
+}
+
 // ---------------- instrument windows ----------------
 function channelApi(channelId: string): PluginUIApi {
   const st = () => store.channel(channelId)?.plugin?.state;

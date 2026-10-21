@@ -22,7 +22,7 @@ import { DT_PRESET, DT_SAMPLE, hasType, pickSamples, readDrag, samplesFromDrop }
 import { ICONS } from './icons';
 import { wm } from './wm';
 import type { PanelDef } from './panel';
-import { openPluginWindow } from './pluginWindow';
+import { openPluginWindow, applyPluginPreset } from './pluginWindow';
 import {
   BASE_GROUPS,
   DT_PLUGIN,
@@ -1197,16 +1197,20 @@ export function createChannelRack(): PanelDef {
     const ch = r?.ch();
     if (kind === 'plugin') {
       e.stopPropagation();
-      const d = readDrag<{ pluginType?: string; type?: string; id?: string }>(e, DT_PLUGIN);
+      const d = readDrag<{ pluginType?: string; type?: string; id?: string; preset?: string }>(e, DT_PLUGIN);
       const choice = resolveInstrument(d?.pluginType ?? d?.type ?? d?.id);
       if (!choice) {
         toast('That plugin is not an instrument', 'warn', 1600);
         return;
       }
+      let nid: ID | null;
       if (ch) {
-        const nid = await confirmReplace(ch.id, choice);
+        nid = await confirmReplace(ch.id, choice);
         if (nid) toast(`${store.channel(nid)?.name ?? 'Channel'} now uses ${choice.name}`, 'ok', 1400);
-      } else addInstrumentChannel(choice);
+      } else nid = addInstrumentChannel(choice);
+      // a dragged preset row (factory or user) loads that preset
+      if (nid && d?.preset && choice.kind === 'plugin') applyPluginPreset(nid, d.preset);
+      else if (nid && d?.preset && choice.kind === 'synth') applyPreset(nid, d.preset);
       return;
     }
     if (kind === 'preset') {

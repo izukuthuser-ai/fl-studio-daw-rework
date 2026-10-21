@@ -45,7 +45,7 @@ async function boot() {
 
   const W = workspace.clientWidth || 1400;
   const H = workspace.clientHeight || 800;
-  const BW = 236;
+  const BW = 300;
   const add = (id: WindowId, title: string, icon: string, panel: PanelDef, rect: { x: number; y: number; w: number; h: number }, min?: { w: number; h: number }) =>
     wm.add({ id, title, icon, body: panel.body, headerExtra: panel.headerExtra, onResize: panel.onResize, onShow: panel.onShow, onHide: panel.onHide, rect, min });
 
