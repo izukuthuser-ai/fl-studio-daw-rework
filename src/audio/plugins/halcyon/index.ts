@@ -1,24 +1,22 @@
-// PLACEHOLDER Halcyon plugin (replaced by the real wavetable synth).
+// Halcyon — wavetable synthesizer (3 morphing wavetable oscillators with unison + warp, sub, noise,
+// 2 routable filters, 3 envelopes, 4 LFOs, 16-slot mod matrix, macros and an FX chain).
 import workletUrl from './halcyon.worklet.ts?worker&url';
 import { registerInstrument } from '../registry';
-import { el } from '../../../core/util';
-import { knob } from '../../../ui/widgets';
+import { defaultState } from './defs';
+import { factoryPresets } from './presets';
+import { createHalcyonUI } from './ui';
 
 registerInstrument({
   id: 'halcyon',
   name: 'Halcyon',
-  desc: 'Wavetable synthesizer',
+  desc: 'Wavetable synthesizer — morphing tables, unison, warps, mod matrix, FX',
   category: 'Synth',
-  color: '#5aa6e8',
-  icon: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M3 15c3-8 5-8 9 0s6 8 9 0"/></svg>',
+  color: '#4fc3f0',
+  icon: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M3 14c2-6 4-6 6 0s4 6 6 0 4-6 6 0"/><path d="M6 8.5c1.6-3 3.2-3 4.8 0" opacity=".55"/><path d="M13.2 8.5c1.6-3 3.2-3 4.8 0" opacity=".55"/></svg>',
   workletUrl,
   processor: 'lf-halcyon',
-  size: { w: 720, h: 460 },
-  defaultState: () => ({ cutoff: 0.5 }),
-  presets: () => [{ name: 'Init', category: 'Basic', state: { cutoff: 0.5 } }],
-  createUI(api) {
-    const k = knob({ def: { key: 'cutoff', label: 'Cutoff', min: 0, max: 1, def: 0.5 }, get: () => api.getState().cutoff, set: (v) => api.live((s) => (s.cutoff = v)), begin: () => api.begin('Cutoff'), end: () => api.end(), size: 40, label: 'Cutoff' });
-    const off = api.onExternalChange(() => k.update());
-    return { el: el('div', { style: { padding: '20px' } }, k), destroy: off };
-  },
+  size: { w: 940, h: 628 },
+  defaultState,
+  presets: () => factoryPresets(),
+  createUI: createHalcyonUI,
 });
