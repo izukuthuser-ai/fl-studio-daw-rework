@@ -42,7 +42,11 @@ export class AudioInputManager {
     this.listeners.add(fn);
     return () => this.listeners.delete(fn);
   }
+  private lastSig = '';
   private changed() {
+    const sig = JSON.stringify([this.devices, this.error, [...this.links.entries()].map(([k, l]) => [k, l.dev])]);
+    if (sig === this.lastSig) return;
+    this.lastSig = sig;
     for (const f of this.listeners) f();
   }
 
@@ -85,7 +89,15 @@ export class AudioInputManager {
         this.refresh(); // labels become available after permission
         return src;
       } catch (e: any) {
-        this.error = e?.name === 'NotAllowedError' ? 'Microphone/line-in permission was denied' : 'Could not open audio input: ' + (e?.message ?? e);
+        const name = e?.name ?? '';
+        this.error =
+          name === 'NotAllowedError'
+            ? 'Microphone/line-in permission was denied'
+            : name === 'NotFoundError' || name === 'OverconstrainedError'
+              ? 'Audio input device not found (unplugged?)'
+              : name === 'NotReadableError'
+                ? 'Audio input is busy (used by another app?)'
+                : `Could not open audio input${name ? ` (${name})` : ''}${e?.message ? ': ' + e.message : ''}`;
         this.changed();
         return null;
       } finally {
