@@ -1,86 +1,51 @@
-// Browser (Alt+F8): instant fuzzy search over built-in sounds, synth presets, favourites, user
-// folders, dropped files and the current project. The tree is rebuilt only when a section's
-// content changes; rows are virtualised and keyed by node, so the row under the mouse and the
-// row being dragged survive every re-render.
+// Browser (Alt+F8), laid out like FL Studio 21's: tab bar (ALL · PROJECT · PLUGINS · LIBRARY · SOUNDS ·
+// STARRED), a colour-coded tree with indent guides and plugin thumbnails, an info panel (title / type /
+// size / path + waveform) and the TAGS search bar at the bottom. Rows are virtualised (variable height
+// because of thumbnails) and keyed by node, so the row under the mouse and the row being dragged
+// survive every re-render. The tree is rebuilt only when what it shows changes.
 import './browser.css';
 import { store } from '../core/store';
 import { Command, commands } from '../core/commands';
 import { engine } from '../audio/engine';
 import { samples } from '../audio/samples';
-import { BUILTIN_BY_ID, BUILTIN_SOUNDS } from '../audio/sounds';
+import { BUILTIN_BY_ID } from '../audio/sounds';
 import { SYNTH_PRESETS, synthPreset } from '../core/project';
+import { FX_DEFS, FX_ORDER } from '../core/params';
 import { AudioListing, basename, isElectron, native } from '../core/native';
-import { el, fuzzyScore } from '../core/util';
-import type { ID, Wave } from '../core/types';
+import { clamp, deepClone, el, fuzzyScore } from '../core/util';
+import type { FxType, ID } from '../core/types';
+import { allInstruments } from '../audio/plugins/registry';
 import { ICONS } from './icons';
 import { MenuItem, iconBtn, showMenu, toast } from './widgets';
-import { addChannel, describeTarget } from './ops';
-import { DT_PATTERN, DT_PRESET, DT_SAMPLE, DragSample, hasType, pickSamples, samplesFromDrop, setDragData } from './dnd';
+import { addChannel, addFx, describeTarget } from './ops';
+import { DT_FX, DT_PATTERN, DT_PLUGIN, DT_PRESET, DT_SAMPLE, DragSample, hasType, pickSamples, samplesFromDrop, setDragData } from './dnd';
 import { clonePattern, deletePattern, patternColor, renamePattern, selectPattern } from './actions';
+import { openFxWindow, openPluginWindow } from './pluginWindow';
 import { wm } from './wm';
-import { BR, CAT_COLOR, CAT_ICON, SAMPLER_COLOR, SYNTH_COLOR, WAVE_ICON } from './browser-icons';
+import { BI, BR, CAT_COLOR, SAMPLER_COLOR } from './browser-icons';
 import { Preview, drawPreview, synthCurve } from './browser-draw';
+import { effectThumb, instrumentThumb, THUMB_H } from './browser-thumbs';
+import { BNode, DEFAULT_OPEN, LEAF, TABS, Tab, Tree, TreeEnv, buildTab, coll, instInfo, pluginPresets, stripExt, walk } from './browser-tree';
 import type { PanelDef } from './panel';
 
-const RH = 22; // row height (px) — keep in sync with .br-row in browser.css
-const OVERSCAN = 8;
+const RH = 22; // row height (px) — keep in sync with --br-rh in browser.css
+const IND = 14; // indent per depth level (px)
+const OVERSCAN = 6;
 const MAX_RESULTS = 500;
+const TAGS = ['Kick', 'Snare', 'Clap', 'Hat', '808', 'Perc', 'Cymbal', 'FX', 'Synth', 'Bass', 'Lead', 'Pad', 'Pluck', 'Reverb', 'Delay', 'Distortion', 'EQ'];
 
-type Kind = 'section' | 'folder' | 'sample' | 'preset' | 'channel' | 'pattern' | 'automation' | 'action' | 'empty';
-type SectionId = 'builtin' | 'presets' | 'favs' | 'folders' | 'dropped' | 'project';
-
-interface BNode {
-  key: string;
-  kind: Kind;
-  label: string;
-  section: SectionId;
-  depth: number;
-  parent: BNode | null;
-  children?: BNode[];
-  ref?: string; // sample ref
-  preset?: string; // synth preset name
-  id?: ID; // channel / pattern / automation id
-  color?: string;
-  icon?: string;
-  meta?: string; // right-aligned text in tree mode
-  where?: string; // context shown with search results (also searched)
-  root?: string; // user folder this node belongs to
-  files?: number; // folders: sounds inside (recursive)
-  run?: () => void; // action rows
-}
-type NodeInit = Omit<BNode, 'depth' | 'parent' | 'section'> & { section?: SectionId };
 type RowEl = HTMLDivElement & { _sig?: string };
-
-const SECTION_DEF: Record<SectionId, { label: string; icon: string }> = {
-  builtin: { label: 'Built-in sounds', icon: ICONS.drum },
-  presets: { label: 'Synth presets', icon: ICONS.synth },
-  favs: { label: 'Favorites', icon: ICONS.starFill },
-  folders: { label: isElectron ? 'Your folders' : 'Your files', icon: ICONS.folder },
-  dropped: { label: 'Dropped files', icon: BR.tray },
-  project: { label: 'Current project', icon: BR.project },
-};
-const SECTION_ORDER: SectionId[] = ['builtin', 'presets', 'favs', 'folders', 'dropped', 'project'];
-const DEFAULT_OPEN = ['sec:builtin', 'bi/Kicks', 'sec:presets', 'sec:favs', 'sec:folders', 'sec:dropped', 'sec:project', 'proj/patterns'];
-const LEAF: ReadonlySet<Kind> = new Set<Kind>(['sample', 'preset', 'channel', 'pattern', 'automation']);
-const coll = new Intl.Collator(undefined, { numeric: true, sensitivity: 'base' });
-const stripExt = (n: string) => n.replace(/\.[^.\\/]+$/, '');
-
-const presetWave = new Map<string, Wave>();
-function presetIcon(name: string) {
-  let w = presetWave.get(name);
-  if (!w) {
-    w = synthPreset(name).osc.find((o) => o.level > 0)?.wave ?? 'sawtooth';
-    presetWave.set(name, w);
-  }
-  return WAVE_ICON[w];
-}
-
+const plural = (n: number, w: string) => `${n} ${w}${n === 1 ? '' : 's'}`;
 function fmtDur(sec: number) {
   if (sec < 1) return Math.round(sec * 1000) + ' ms';
   if (sec < 60) return sec.toFixed(2) + ' s';
   return `${Math.floor(sec / 60)}:${String(Math.floor(sec % 60)).padStart(2, '0')} min`;
 }
-const plural = (n: number, w: string) => `${n} ${w}${n === 1 ? '' : 's'}`;
+function fmtBytes(b: number) {
+  if (b < 1024) return b + ' B';
+  if (b < 1048576) return (b / 1024).toFixed(1) + ' KB';
+  return (b / 1048576).toFixed(2) + ' MB';
+}
 
 // ---------- guarded storage ----------
 function loadList(key: string, def: string[] = []): string[] {
@@ -98,6 +63,18 @@ function saveList(key: string, v: string[]) {
     localStorage.setItem(key, JSON.stringify(v));
   } catch {}
 }
+function loadStr(key: string, def: string) {
+  try {
+    return localStorage.getItem(key) ?? def;
+  } catch {
+    return def;
+  }
+}
+function saveStr(key: string, v: string) {
+  try {
+    localStorage.setItem(key, v);
+  } catch {}
+}
 
 // ---------- keyboard commands (ctx 'browser') ----------
 interface BrowserApi {
@@ -110,6 +87,7 @@ interface BrowserApi {
   focusSearch(): void;
   clearSearch(): void;
   searching(): boolean;
+  tab(d: 1 | -1): void;
 }
 let api: BrowserApi | null = null;
 let registered = false;
@@ -124,16 +102,18 @@ function registerCommands() {
     c('browser.downPreview', 'Next item and preview it', ['Shift+Down'], () => api?.move(1, true), true),
     c('browser.collapse', 'Collapse folder / go to parent', ['Left'], () => api?.left(), true),
     c('browser.expand', 'Expand folder / go to first item', ['Right'], () => api?.right(), true),
-    c('browser.enter', "Replace selected channel's sample / apply preset", ['Enter'], () => api?.enter()),
-    c('browser.addChannel', 'Open selected sound in a new channel', ['Shift+Enter'], () => api?.addSel()),
+    c('browser.enter', "Replace selected channel's sample / apply preset / add plugin", ['Enter'], () => api?.enter()),
+    c('browser.addChannel', 'Open selected item in a new channel', ['Shift+Enter'], () => api?.addSel()),
     c('browser.search', 'Search the browser', ['Ctrl+F'], () => api?.focusSearch()),
     { ...c('browser.clearSearch', 'Clear browser search', ['Esc'], () => api?.clearSearch()), enabled: () => !!api?.searching(), hidden: true },
-    c('browser.favorite', 'Add / remove favorite', [], () => api?.favSel()),
+    c('browser.favorite', 'Star / unstar item', [], () => api?.favSel()),
+    c('browser.nextTab', 'Next browser tab', ['Ctrl+Right'], () => api?.tab(1)),
+    c('browser.prevTab', 'Previous browser tab', ['Ctrl+Left'], () => api?.tab(-1)),
   ]);
 }
 
 export function createBrowser(): PanelDef {
-  // ---------------- state ----------------
+  // ================= state =================
   const favs = loadList('lf.favs');
   let favSet = new Set(favs);
   const folders = isElectron ? loadList('lf.folders') : [];
@@ -141,54 +121,69 @@ export function createBrowser(): PanelDef {
   const picked: DragSample[] = []; // web build: files added this session
   const dropped: DragSample[] = [];
   const names = new Map<string, string>(); // ref -> display name for session sounds
-  const open = new Set(loadList('lf.browser.open', DEFAULT_OPEN));
-  const byKey = new Map<string, BNode>();
-  let roots: BNode[] = [];
+  let tab: Tab = (TABS.some((t) => t.id === loadStr('lf.browser.tab', 'all')) ? loadStr('lf.browser.tab', 'all') : 'all') as Tab;
+  let thumbs = loadStr('lf.browser.thumbs', '1') !== '0';
+  const openSets = new Map<Tab, Set<string>>();
+  const openOf = (t: Tab) => {
+    let s = openSets.get(t);
+    if (!s) {
+      // the old single open-set carries over to the ALL tab
+      const legacy = t === 'all' ? loadList('lf.browser.open', []) : [];
+      s = new Set(loadList('lf.browser.open.' + t, [...DEFAULT_OPEN[t], ...legacy.filter((k) => !k.startsWith('sec:'))]));
+      openSets.set(t, s);
+    }
+    return s;
+  };
+  let tree: Tree = new Tree();
   let rows: BNode[] = [];
+  let tops: number[] = [0];
   let query = '';
   let selKey: string | null = null;
   let projSig = '';
+  let regSig = '';
   let dragRow: RowEl | null = null;
   let rowEls = new Map<string, RowEl>();
   let raf = 0;
   const visible = () => !!wm?.get('browser')?.visible;
 
-  // ---------------- DOM ----------------
-  const input = el('input', {
-    class: 'br-q',
-    type: 'text',
-    placeholder: 'Search sounds, presets, project…',
-    spellcheck: false,
-    'data-hint': 'Fuzzy search across every section (Ctrl+F) — ↑/↓ pick a result, Enter previews it, Esc clears',
-  }) as HTMLInputElement;
-  const clearBtn = el('button', { class: 'br-clear', html: ICONS.close, 'data-hint': 'Clear search (Esc)' });
-  const status = el('div', { class: 'br-status' });
-  const top = el(
-    'div',
-    { class: 'br-top' },
-    el('div', { class: 'br-search' }, el('span', { class: 'br-search-ic', html: ICONS.search }), input, clearBtn),
-    status,
-  );
+  // ================= DOM =================
+  const tabBtns = new Map<Tab, HTMLElement>();
+  const tabBar = el('div', { class: 'br-tabs' });
+  for (const t of TABS) {
+    const b = el('button', { class: 'br-tab', 'data-hint': `${t.label} — ${t.hint}` }, el('span', { class: 'br-tab-full', text: t.label }), el('span', { class: 'br-tab-short', text: t.short }));
+    b.addEventListener('click', () => setTab(t.id));
+    tabBtns.set(t.id, b);
+    tabBar.append(b);
+  }
   const spacer = el('div', { class: 'br-spacer' });
   const layer = el('div', { class: 'br-layer' });
   const emptyMsg = el('div', { class: 'br-empty' });
-  const list = el('div', { class: 'br-list', 'data-hint': 'Click = preview · double-click = new channel · drag onto the Channel rack / Playlist · right-click for more' }, spacer, layer, emptyMsg);
-  const infoIc = el('span', { class: 'br-info-ic' });
-  const infoName = el('div', { class: 'br-info-name' });
-  const infoMeta = el('div', { class: 'br-info-meta' });
+  const list = el('div', { class: 'br-list', tabindex: '-1', 'data-hint': 'Click = select / preview · double-click = add · drag onto the Channel rack, Playlist or Mixer · right-click for more' }, spacer, layer, emptyMsg);
+  const status = el('div', { class: 'br-status' });
+
+  // info panel
+  const infoRows = el('div', { class: 'br-info-rows' });
+  const infoMark = el('span', { class: 'br-info-mark' });
   const wave = el('canvas', { class: 'br-wave', 'data-hint': 'Click the waveform to preview the selected sound again' }) as HTMLCanvasElement;
-  const info = el('div', { class: 'br-info' }, el('div', { class: 'br-info-head' }, infoIc, infoName), infoMeta, wave);
-  const root = el('div', { class: 'browser' }, top, list, info);
+  const infoThumb = el('img', { class: 'br-info-thumb', alt: '', draggable: false }) as HTMLImageElement;
+  const info = el('div', { class: 'br-info idle' }, infoMark, infoRows, el('div', { class: 'br-info-view' }, wave, infoThumb));
 
-  // ---------------- tree ----------------
-  function add(parent: BNode | null, n: NodeInit): BNode {
-    const node: BNode = { ...n, section: n.section ?? parent!.section, depth: parent ? parent.depth + 1 : 0, parent };
-    if (parent) (parent.children ??= []).push(node);
-    byKey.set(node.key, node);
-    return node;
-  }
-  const emptyRow = (p: BNode, label: string) => add(p, { key: p.key + '|empty', kind: 'empty', label });
+  // TAGS search bar
+  const input = el('input', {
+    class: 'br-q',
+    type: 'text',
+    placeholder: 'Search',
+    spellcheck: false,
+    'data-hint': 'Fuzzy search in the current tab (Ctrl+F) — ↑/↓ pick a result, Enter previews / selects, Shift+Enter adds, Esc clears',
+  }) as HTMLInputElement;
+  const clearBtn = el('button', { class: 'br-clear', html: ICONS.close, 'data-hint': 'Clear search (Esc)' });
+  const tagsBtn = el('button', { class: 'br-tags', text: 'TAGS', 'data-hint': 'Filter by tag — pick a keyword to search for' });
+  const folderBtn = el('button', { class: 'br-sbtn', html: BI.folderSmall, 'data-hint': isElectron ? 'Add a folder of sounds to the browser' : 'Add audio files to the browser (kept for this session)' });
+  const findBtn = el('button', { class: 'br-sbtn find', html: BI.search, 'data-hint': 'Search the browser (Ctrl+F)' });
+  const tagsBar = el('div', { class: 'br-tagsbar' }, tagsBtn, el('div', { class: 'br-search' }, input, clearBtn, folderBtn, findBtn));
+  const root = el('div', { class: 'browser' }, tabBar, list, status, info, tagsBar);
 
+  // ================= helpers =================
   function sampleName(ref: string) {
     return names.get(ref) ?? stripExt(samples.displayName(ref));
   }
@@ -207,242 +202,217 @@ export function createBrowser(): PanelDef {
     if (ref.startsWith('embed:')) return samples.embedded.has(ref);
     return false;
   }
+  const env: TreeEnv = {
+    get favs() {
+      return favs;
+    },
+    get folders() {
+      return folders;
+    },
+    listings,
+    picked,
+    dropped,
+    sampleName,
+    sampleColor,
+    sourceOf,
+    resolvable,
+    addFolder: () => void addFolder(),
+    addFiles: () => void addFiles(),
+  };
 
-  function fillDir(rootNode: BNode, dir: string, files: AudioListing[]) {
-    const dirs = new Map<string, BNode>([['', rootNode]]);
-    const rootName = rootNode.label;
-    for (const f of files) {
-      const parts = f.rel.split(/[\\/]+/).filter(Boolean);
-      parts.pop();
-      let cur = rootNode;
-      let acc = '';
-      for (const part of parts) {
-        acc = acc ? acc + '/' + part : part;
-        let d = dirs.get(acc);
-        if (!d) {
-          d = add(cur, { key: `uf|${dir}|d|${acc}`, kind: 'folder', label: part, root: dir, where: rootName + '/' + acc });
-          dirs.set(acc, d);
-        }
-        cur = d;
-      }
-      add(cur, { key: `uf|${dir}|f|${f.rel}`, kind: 'sample', label: stripExt(f.name), ref: 'file:' + f.path, root: dir, where: acc ? rootName + '/' + acc : rootName, color: SAMPLER_COLOR });
-    }
-    const finish = (n: BNode): number => {
-      if (!n.children) return n.kind === 'sample' ? 1 : 0;
-      n.children.sort((a, b) => (a.kind === 'folder') !== (b.kind === 'folder') ? (a.kind === 'folder' ? -1 : 1) : coll.compare(a.label, b.label));
-      let c = 0;
-      for (const ch of n.children) c += finish(ch);
-      n.files = c;
-      n.meta = String(c);
-      return c;
-    };
-    finish(rootNode);
+  // ================= tree =================
+  function rebuild() {
+    tree = buildTab(tab, env, thumbs);
+    if (selKey && !tree.byKey.has(selKey)) selKey = null;
+    flatten();
+    render();
   }
+  const cur = () => (selKey ? tree.byKey.get(selKey) : undefined);
+  const open = () => openOf(tab);
+  const persistOpen = () => saveList('lf.browser.open.' + tab, [...open()]);
 
-  function buildTree() {
-    byKey.clear();
-    const sec: Partial<Record<SectionId, BNode>> = {};
-    for (const id of SECTION_ORDER) sec[id] = add(null, { key: 'sec:' + id, kind: 'section', label: SECTION_DEF[id].label, section: id, icon: SECTION_DEF[id].icon, children: [] });
-
-    // built-in sounds, grouped by category
-    const cats = new Map<string, BNode>();
-    for (const s of BUILTIN_SOUNDS) {
-      let c = cats.get(s.category);
-      if (!c) {
-        c = add(sec.builtin!, { key: 'bi/' + s.category, kind: 'folder', label: s.category, color: CAT_COLOR[s.category], icon: CAT_ICON[s.category] });
-        cats.set(s.category, c);
-      }
-      const ref = 'builtin:' + s.id;
-      add(c, { key: 'bi|' + ref, kind: 'sample', label: s.name, ref, color: CAT_COLOR[s.category], where: 'Built-in · ' + s.category });
+  function identity(n: BNode) {
+    switch (n.kind) {
+      case 'sample':
+        return 's:' + n.ref;
+      case 'preset':
+        return 'p:' + n.preset;
+      case 'plugpreset':
+        return `pp:${n.plugin}:${n.preset}`;
+      case 'plugin':
+        return 'pl:' + n.plugin;
+      case 'fx':
+        return 'fx:' + n.fx;
+      default:
+        return n.key;
     }
-    for (const c of cats.values()) {
-      c.files = c.children!.length;
-      c.meta = String(c.files);
-    }
-    sec.builtin!.files = BUILTIN_SOUNDS.length;
-
-    // synth presets
-    for (const p of SYNTH_PRESETS) add(sec.presets!, { key: 'pr|' + p.name, kind: 'preset', label: p.name, preset: p.name, color: SYNTH_COLOR, icon: presetIcon(p.name), where: 'Synth preset' });
-
-    // favourites
-    for (const r of favs) {
-      if (r.startsWith('preset:')) {
-        const name = r.slice(7);
-        if (SYNTH_PRESETS.some((p) => p.name === name)) add(sec.favs!, { key: 'fav|' + r, kind: 'preset', label: name, preset: name, color: SYNTH_COLOR, icon: presetIcon(name), meta: 'Preset', where: 'Favorite · preset' });
-      } else if (resolvable(r)) {
-        add(sec.favs!, { key: 'fav|' + r, kind: 'sample', label: sampleName(r), ref: r, color: sampleColor(r), meta: sourceOf(r), where: 'Favorite · ' + sourceOf(r) });
-      }
-    }
-    if (!sec.favs!.children!.length) emptyRow(sec.favs!, 'Click ☆ on a sound to pin it here');
-
-    // user folders (desktop) / session files (web)
-    if (isElectron) {
-      add(sec.folders!, { key: 'act|addFolder', kind: 'action', label: 'Add folder…', icon: BR.addFolder, run: () => void addFolder() });
-      for (const dir of folders) {
-        const rn = add(sec.folders!, { key: 'uf|' + dir, kind: 'folder', label: basename(dir) || dir, root: dir, where: dir });
-        const st = listings.get(dir);
-        if (!st || st.loading) emptyRow(rn, 'Scanning…');
-        else if (!st.files.length) emptyRow(rn, 'No audio files found');
-        else fillDir(rn, dir, st.files);
-      }
-    } else {
-      add(sec.folders!, { key: 'act|addFiles', kind: 'action', label: 'Add audio files…', icon: BR.plus, run: () => void addFiles() });
-      for (const s of picked) add(sec.folders!, { key: 'uf|' + s.ref, kind: 'sample', label: s.name, ref: s.ref, color: SAMPLER_COLOR, where: 'Your files' });
-    }
-
-    // dropped files
-    for (const s of dropped) add(sec.dropped!, { key: 'drop|' + s.ref, kind: 'sample', label: s.name, ref: s.ref, color: SAMPLER_COLOR, where: 'Dropped' });
-    if (!dropped.length) emptyRow(sec.dropped!, 'Drop audio files here');
-
-    // current project
-    const p = store.project;
-    const chs = add(sec.project!, { key: 'proj/channels', kind: 'folder', label: 'Channels', icon: ICONS.channelRack, meta: String(p.channels.length) });
-    for (const c of p.channels) {
-      const icon = c.type === 'synth' ? WAVE_ICON[c.synth?.osc.find((o) => o.level > 0)?.wave ?? 'sawtooth'] : BR.sample;
-      add(chs, { key: 'ch|' + c.id, kind: 'channel', label: c.name, id: c.id, color: c.color, icon, meta: c.mixer > 0 ? `M${c.mixer}` : 'Master', where: 'Project · channel' });
-    }
-    if (!p.channels.length) emptyRow(chs, 'No channels yet');
-    const pts = add(sec.project!, { key: 'proj/patterns', kind: 'folder', label: 'Patterns', icon: ICONS.pianoRoll, meta: String(p.patterns.length) });
-    p.patterns.forEach((pt, i) => add(pts, { key: 'pt|' + pt.id, kind: 'pattern', label: pt.name, id: pt.id, color: pt.color, meta: String(i + 1), where: 'Project · pattern ' + (i + 1) }));
-    const aus = add(sec.project!, { key: 'proj/auto', kind: 'folder', label: 'Automation clips', icon: ICONS.automation, meta: String(p.automations.length) });
-    for (const a of p.automations) add(aus, { key: 'au|' + a.id, kind: 'automation', label: a.name, id: a.id, color: a.color, icon: ICONS.automation, where: 'Project · automation' });
-    if (!p.automations.length) emptyRow(aus, 'None — right-click a knob to create one');
-
-    roots = SECTION_ORDER.map((id) => sec[id]!);
   }
-
-  function walk(n: BNode, fn: (n: BNode) => void) {
-    fn(n);
-    if (n.children) for (const c of n.children) walk(c, fn);
-  }
-
-  function searchRows(q: string): BNode[] {
+  function searchRows(t: Tree, q: string): BNode[] {
     const ql = q.toLowerCase();
     const hits: { n: BNode; s: number }[] = [];
     const seen = new Set<string>();
     const consider = (n: BNode) => {
       if (!LEAF.has(n.kind)) return;
-      const ident = n.kind === 'sample' ? 's:' + n.ref : n.kind === 'preset' ? 'p:' + n.preset : n.key;
+      const ident = identity(n);
       if (seen.has(ident)) return;
       let s = fuzzyScore(q, n.label);
-      if (n.where) {
-        const i = n.where.toLowerCase().indexOf(ql);
-        if (i >= 0) s = Math.max(s, 480 - i);
-      }
+      const ctx = (n.where ?? '') + ' ' + (n.info ?? '');
+      const i = ctx.toLowerCase().indexOf(ql);
+      if (i >= 0) s = Math.max(s, 480 - i);
       if (s < 0) return;
-      if (n.section === 'project') s -= 5; // on near-ties, sounds and presets come before project items
+      if (n.kind === 'channel' || n.kind === 'pattern' || n.kind === 'automation' || n.kind === 'mixfx') s -= 5;
       seen.add(ident);
       hits.push({ n, s });
     };
-    // favourites last, so a favourite that also lives elsewhere shows up once under its real home
-    for (const r of roots) if (r.section !== 'favs') walk(r, consider);
-    for (const r of roots) if (r.section === 'favs') walk(r, consider);
+    // starred entries last, so an item that also lives elsewhere shows up once under its real home
+    for (const r of t.roots) if (r.key !== 'sec:starred') walk(r, consider);
+    for (const r of t.roots) if (r.key === 'sec:starred') walk(r, consider);
     hits.sort((a, b) => b.s - a.s || coll.compare(a.n.label, b.n.label));
     return hits.slice(0, MAX_RESULTS).map((h) => h.n);
   }
+  const hasThumb = (n: BNode) => thumbs && !!n.thumb && !query;
+  const rowH = (n: BNode) => (hasThumb(n) ? RH + THUMB_H + 6 : RH);
 
+  let otherTabHits = 0;
   function flatten() {
+    let out: BNode[];
     if (query) {
-      rows = searchRows(query);
-      status.textContent = rows.length ? `${rows.length >= MAX_RESULTS ? MAX_RESULTS + '+' : rows.length} ${rows.length === 1 ? 'result' : 'results'} · Esc clears` : 'No matches · Esc clears';
-      return;
+      out = searchRows(tree, query);
+      otherTabHits = 0;
+      if (!out.length && tab !== 'all') otherTabHits = searchRows(buildTab('all', env, false), query).length;
+      const label = TABS.find((t) => t.id === tab)!.label;
+      status.textContent = out.length
+        ? `${out.length >= MAX_RESULTS ? MAX_RESULTS + '+' : out.length} ${out.length === 1 ? 'result' : 'results'} in ${label} · Esc clears`
+        : `No matches in ${label} · Esc clears`;
+    } else {
+      out = [];
+      const o = open();
+      const visit = (n: BNode) => {
+        out.push(n);
+        if (n.children && o.has(n.key)) for (const c of n.children) visit(c);
+      };
+      for (const r of tree.roots) visit(r);
     }
-    const out: BNode[] = [];
-    const visit = (n: BNode) => {
-      out.push(n);
-      if (n.children && open.has(n.key)) for (const c of n.children) visit(c);
-    };
-    for (const r of roots) visit(r);
     rows = out;
+    tops = new Array(rows.length + 1);
+    tops[0] = 0;
+    for (let i = 0; i < rows.length; i++) tops[i + 1] = tops[i] + rowH(rows[i]);
+  }
+  /** Index of the row containing y. */
+  function rowAt(y: number) {
+    let lo = 0, hi = rows.length - 1;
+    while (lo < hi) {
+      const mid = (lo + hi + 1) >> 1;
+      if (tops[mid] <= y) lo = mid;
+      else hi = mid - 1;
+    }
+    return lo;
   }
 
-  function rebuild() {
-    buildTree();
-    flatten();
-    render();
+  // ================= rendering (virtualised, keyed rows) =================
+  function favRef(n: BNode | undefined): string | null {
+    if (!n) return null;
+    switch (n.kind) {
+      case 'sample':
+        return n.ref ?? null;
+      case 'preset':
+        return 'preset:' + n.preset;
+      case 'plugpreset':
+        return `plugpreset:${n.plugin}:${n.preset}`;
+      case 'plugin':
+        return 'plugin:' + n.plugin;
+      case 'fx':
+        return 'fx:' + n.fx;
+      default:
+        return null;
+    }
   }
-
-  // ---------------- rendering (virtualised, keyed rows) ----------------
-  function isFavNode(n: BNode) {
+  const isFav = (n: BNode) => {
     const r = favRef(n);
     return !!r && favSet.has(r);
-  }
+  };
   function isCurrent(n: BNode) {
     const ui = store.ui;
     if (n.kind === 'pattern') return n.id === ui.currentPattern;
     if (n.kind === 'channel') return ui.selectedChannels.includes(n.id!);
     if (n.kind === 'automation') return ui.plSource?.kind === 'automation' && ui.plSource.ref === n.id;
+    if (n.kind === 'mixfx') return n.track === ui.selectedMixer;
     return false;
   }
   function hintFor(n: BNode): string {
     switch (n.kind) {
       case 'sample':
-        return `${n.label} — click to preview · double-click adds a new channel · drag onto the Channel rack or Playlist · Enter loads it into the selected channel`;
+        return `${n.label} — click previews · double-click adds a Sampler channel · drag onto the Channel rack or Playlist · Enter loads it into the selected channel`;
       case 'preset':
-        return `${n.label} (Tri-Osc Synth preset) — double-click adds a synth channel · drag onto the Channel rack · Enter applies it to the selected synth channel`;
-      case 'section':
+        return `${n.label} (Tri-Osc Synth preset) — double-click adds a synth channel · drag onto the Channel rack · Enter applies it to the selected synth`;
+      case 'plugpreset':
+        return `${n.label} (${instInfo(n.plugin)?.name ?? 'plugin'} preset) — double-click adds the instrument with this preset · Enter applies it to the selected channel`;
+      case 'plugin':
+        return `${n.label} — ${n.info ?? 'instrument'}. Double-click (or Enter) adds it to the Channel rack · drag onto the Channel rack`;
+      case 'fx':
+        return `${n.label} — ${n.info ?? 'effect'}. Double-click (or Enter) adds it to the selected mixer track · drag onto a mixer strip or slot`;
       case 'folder':
-        return n.root && n.key === 'uf|' + n.root ? `${n.root} — right-click to refresh or remove` : `${n.label} — click to expand / collapse (← →)`;
+        return n.root && n.key === 'uf|' + n.root ? `${n.root} — right-click to refresh or remove` : `${n.label} — click to open / close (← →)`;
       case 'channel':
-        return `${n.label} — click to select · double-click opens its settings`;
+        return `${n.label} — click selects · double-click opens its instrument window`;
       case 'pattern':
-        return `${n.label} — click to select · drag onto the Playlist to place it · double-click shows the Channel rack`;
+        return `${n.label} — click selects · drag onto the Playlist · double-click shows the Channel rack`;
       case 'automation':
         return `${n.label} — click to use as the Playlist's clip source`;
+      case 'mixfx':
+        return `${n.label} on ${n.meta} — click selects the mixer track · double-click opens the effect`;
+      case 'recent':
+        return `${n.path} — double-click (or Enter) opens it`;
       case 'action':
         return n.label;
       default:
         return '';
     }
   }
-  function iconEl(n: BNode, isOpen: boolean): HTMLElement {
-    const e = el('span', { class: 'br-ic' });
-    switch (n.kind) {
-      case 'section':
-      case 'action':
-      case 'channel':
-      case 'automation':
-        e.innerHTML = n.icon ?? '';
-        break;
-      case 'folder':
-        e.innerHTML = n.icon ?? (isOpen ? BR.folderOpen : BR.folder);
-        break;
-      case 'sample':
-        e.innerHTML = BR.sample;
-        break;
-      case 'preset':
-        e.innerHTML = n.icon ?? WAVE_ICON.sawtooth;
-        break;
-      case 'pattern':
-        e.append(el('span', { class: 'br-swatch' }));
-        break;
-      case 'empty':
-        break;
-    }
-    if (n.color) e.style.setProperty('--c', n.color);
-    return e;
-  }
 
   function paintRow(r: RowEl, n: BNode, i: number) {
     const flat = !!query;
-    const isOpen = !flat && !!n.children && open.has(n.key);
-    const fav = isFavNode(n);
+    const isOpen = !flat && !!n.children && open().has(n.key);
+    const fav = isFav(n);
     const meta = flat ? n.where ?? '' : n.meta ?? '';
     const depth = flat ? 0 : n.depth;
-    const sig = `${n.kind}\u0001${n.label}\u0001${meta}\u0001${depth}\u0001${isOpen}\u0001${fav}\u0001${n.color ?? ''}\u0001${flat}`;
-    r.style.top = i * RH + 'px';
+    const th = hasThumb(n);
+    const bg = n.kind === 'folder' ? (isOpen ? 'open' : 'closed') : 'leaf';
+    const sig = [n.kind, n.label, meta, depth, isOpen, fav, n.color, n.tint, flat, th, n.icon?.length, bg].join('\u0001');
+    r.style.top = tops[i] + 'px';
+    r.style.height = tops[i + 1] - tops[i] + 'px';
     if (r.dataset.key !== n.key) r.dataset.key = n.key;
     if (r._sig !== sig) {
       r._sig = sig;
-      r.className = 'br-row k-' + n.kind + (n.kind === 'section' ? ' s-' + n.section : '') + (flat ? ' flat' : '');
-      r.style.paddingLeft = (flat ? 6 : 3 + depth * 12) + 'px';
+      r.className = `br-row k-${n.kind} bg-${bg}${depth === 0 ? ' top' : ''}${flat ? ' flat' : ''}${th ? ' has-thumb' : ''}`;
       r.textContent = '';
-      if (!flat) r.append(el('span', { class: 'br-tw' + (isOpen ? ' open' : ''), html: n.children ? BR.chevron : '' }));
-      r.append(iconEl(n, isOpen), el('span', { class: 'br-label', text: n.label }));
-      if (meta) r.append(el('span', { class: 'br-meta', text: meta }));
-      if (n.kind === 'sample' || n.kind === 'preset')
-        r.append(el('span', { class: 'br-star' + (fav ? ' on' : ''), html: fav ? ICONS.starFill : ICONS.star, 'data-hint': fav ? 'Remove from favorites' : 'Add to favorites' }));
-      r.draggable = n.kind === 'sample' || n.kind === 'preset' || n.kind === 'pattern';
+      const line = el('div', { class: 'br-line' });
+      line.style.paddingLeft = 4 + depth * IND + 'px';
+      if (depth > 0) {
+        const g = el('span', { class: 'br-guides' });
+        g.style.width = depth * IND + 'px';
+        line.append(g);
+      }
+      const ic = el('span', { class: 'br-ic' });
+      if (n.kind === 'pattern') ic.append(el('span', { class: 'br-swatch' }));
+      else if (n.kind === 'folder' && !n.icon) ic.innerHTML = isOpen ? BI.folderOpen : BI.folder;
+      else if (n.kind === 'sample') ic.innerHTML = BR.sample;
+      else ic.innerHTML = n.icon ?? '';
+      if (n.color) ic.style.setProperty('--c', n.color);
+      const lab = el('span', { class: 'br-label', text: n.label });
+      if (n.tint) lab.style.color = n.tint;
+      line.append(ic, lab);
+      if (meta) line.append(el('span', { class: 'br-meta', text: meta }));
+      if (favRef(n)) line.append(el('span', { class: 'br-star' + (fav ? ' on' : ''), html: fav ? ICONS.starFill : ICONS.star, 'data-hint': fav ? 'Unstar' : 'Star — collect it under STARRED' }));
+      if (n.kind === 'folder') line.append(el('span', { class: 'br-arrow', html: isOpen ? BI.caretDown : BI.caretRight }));
+      r.append(line);
+      if (th) {
+        const t = n.kind === 'fx' ? effectThumb(n.fx!, n.color ?? '#9fb2c2') : instrumentThumb(n.plugin!, n.color ?? '#9fb2c2');
+        const img = el('img', { class: 'br-thumb', src: t.url, width: t.w, height: t.h, alt: '', draggable: false }) as HTMLImageElement;
+        img.style.marginLeft = 4 + depth * IND + 22 + 'px';
+        r.append(img);
+      }
+      r.draggable = ['sample', 'preset', 'plugpreset', 'plugin', 'fx', 'pattern'].includes(n.kind);
       r.dataset.hint = hintFor(n);
     }
     r.classList.toggle('sel', n.key === selKey);
@@ -452,11 +422,11 @@ export function createBrowser(): PanelDef {
   function render() {
     if (!visible()) return;
     const n = rows.length;
-    spacer.style.height = n * RH + 'px';
+    spacer.style.height = tops[n] + 'px';
     const h = list.clientHeight || 600;
     const st = list.scrollTop;
-    const i0 = Math.max(0, Math.floor(st / RH) - OVERSCAN);
-    const i1 = Math.min(n, Math.ceil((st + h) / RH) + OVERSCAN);
+    const i0 = n ? Math.max(0, rowAt(st) - OVERSCAN) : 0;
+    const i1 = n ? Math.min(n, rowAt(st + h) + 1 + OVERSCAN) : 0;
     const next = new Map<string, RowEl>();
     for (let i = i0; i < i1; i++) {
       const node = rows[i];
@@ -478,8 +448,19 @@ export function createBrowser(): PanelDef {
       } else r.remove();
     }
     rowEls = next;
-    emptyMsg.textContent = query && !n ? `Nothing matches “${query}”` : '';
-    emptyMsg.style.display = query && !n ? '' : 'none';
+    let msg = '';
+    if (query && !n) msg = otherTabHits ? '' : `Nothing matches “${query}”`;
+    else if (!query && !n) msg = 'Nothing here yet';
+    emptyMsg.textContent = msg;
+    emptyMsg.style.display = msg ? '' : 'none';
+    if (query && !n && otherTabHits) {
+      emptyMsg.style.display = '';
+      emptyMsg.textContent = '';
+      emptyMsg.append(
+        el('div', { text: `Nothing in ${TABS.find((t) => t.id === tab)!.label}.` }),
+        el('button', { class: 'br-alltabs', text: `Show ${otherTabHits} ${otherTabHits === 1 ? 'match' : 'matches'} in ALL`, onclick: () => setTab('all') }),
+      );
+    }
   }
   function renderSoon() {
     if (raf) return;
@@ -489,14 +470,45 @@ export function createBrowser(): PanelDef {
     });
   }
   function ensureVisible(i: number) {
-    if (i < 0) return;
+    if (i < 0 || i >= rows.length) return;
     const h = list.clientHeight;
-    if (i * RH < list.scrollTop) list.scrollTop = i * RH;
-    else if ((i + 1) * RH > list.scrollTop + h) list.scrollTop = (i + 1) * RH - h;
+    if (tops[i] < list.scrollTop) list.scrollTop = tops[i];
+    else if (tops[i + 1] > list.scrollTop + h) list.scrollTop = tops[i + 1] - h;
   }
 
-  // ---------------- selection / open state ----------------
-  const cur = () => (selKey ? byKey.get(selKey) : undefined);
+  // ================= tabs =================
+  function paintTabs() {
+    for (const [id, b] of tabBtns) b.classList.toggle('on', id === tab);
+  }
+  function setTab(t: Tab) {
+    if (t === tab && tree.roots.length) {
+      rebuild(); // clicking the active tab refreshes it (e.g. presets saved from a plugin window)
+      return;
+    }
+    tab = t;
+    saveStr('lf.browser.tab', t);
+    paintTabs();
+    const keepSel = selKey;
+    tree = buildTab(tab, env, thumbs);
+    selKey = keepSel && tree.byKey.has(keepSel) ? keepSel : null;
+    flatten();
+    list.scrollTop = 0;
+    render();
+    if (selKey) requestAnimationFrame(() => ensureVisible(rows.findIndex((r) => r.key === selKey)));
+    else void showInfo(undefined);
+  }
+  /** Full labels when they fit, then a tighter type size, then short labels. */
+  function fitTabs() {
+    const over = () => tabBar.scrollWidth > tabBar.clientWidth + 1;
+    root.classList.remove('br-narrow', 'br-compact');
+    if (!over()) return;
+    root.classList.add('br-compact');
+    if (!over()) return;
+    root.classList.remove('br-compact');
+    root.classList.add('br-narrow');
+  }
+
+  // ================= selection / open state =================
   function select(n: BNode | undefined, scroll = false) {
     if (!n) return;
     const changed = selKey !== n.key;
@@ -505,17 +517,14 @@ export function createBrowser(): PanelDef {
     render();
     if (changed) void showInfo(n);
   }
-  function persistOpen() {
-    saveList('lf.browser.open', [...open]);
-  }
-  /** If the selected node is hidden inside a collapsed folder, select that folder instead. */
+  /** If the selected node is hidden inside a closed folder, select that folder instead. */
   function revealSel() {
     const n = cur();
     if (!n || query) return;
     const chain: BNode[] = [];
     for (let p = n.parent; p; p = p.parent) chain.unshift(p);
     for (const a of chain)
-      if (!open.has(a.key)) {
+      if (!open().has(a.key)) {
         selKey = a.key;
         void showInfo(a);
         return;
@@ -523,36 +532,52 @@ export function createBrowser(): PanelDef {
   }
   function setOpen(n: BNode, on: boolean) {
     if (!n.children) return;
-    if (on) open.add(n.key);
-    else open.delete(n.key);
+    if (on) open().add(n.key);
+    else open().delete(n.key);
     revealSel();
     persistOpen();
     flatten();
     render();
   }
-  const toggle = (n: BNode) => setOpen(n, !open.has(n.key));
+  const toggle = (n: BNode) => setOpen(n, !open().has(n.key));
   function setOpenDeep(n: BNode, on: boolean) {
     walk(n, (c) => {
       if (!c.children || c === n) return;
-      if (on) open.add(c.key);
-      else open.delete(c.key);
+      if (on) open().add(c.key);
+      else open().delete(c.key);
     });
-    if (on) open.add(n.key);
+    if (on) open().add(n.key);
     revealSel();
     persistOpen();
     flatten();
     render();
   }
   function collapseAll() {
-    for (const k of [...open]) if (!k.startsWith('sec:')) open.delete(k);
+    open().clear();
     revealSel();
     persistOpen();
     flatten();
     render();
     ensureVisible(rows.findIndex((r) => r.key === selKey));
   }
+  /** Open every ancestor of `n` and select it. */
+  function reveal(n: BNode) {
+    if (query) {
+      input.value = '';
+      onQuery();
+    }
+    for (let p = n.parent; p; p = p.parent) open().add(p.key);
+    persistOpen();
+    flatten();
+    select(n);
+    requestAnimationFrame(() => {
+      const i = rows.indexOf(n);
+      if (i >= 0) list.scrollTop = Math.max(0, tops[i] - list.clientHeight / 3);
+      render();
+    });
+  }
 
-  // ---------------- actions ----------------
+  // ================= actions =================
   async function preview(n: BNode) {
     if (!n.ref) return;
     try {
@@ -560,7 +585,6 @@ export function createBrowser(): PanelDef {
     } catch {}
     if (samples.isMissing(n.ref)) toast(`Couldn't load “${n.label}” — the file is missing or unreadable`, 'warn');
   }
-
   function addSampleChannel(ref: string, name: string) {
     // one undo step: the shared factory leaves sampleName empty for non-built-in sounds
     store.begin('Add channel');
@@ -574,8 +598,44 @@ export function createBrowser(): PanelDef {
     toast(`Added “${name}” to the Channel rack`, 'ok', 1400);
   }
   function addPresetChannel(name: string) {
-    addChannel('synth', { preset: name });
+    addChannel('synth', { name: name === 'Init' ? 'Tri-Osc' : name, preset: name, group: 'Synths' });
     toast(`Added a Tri-Osc Synth (“${name}”) to the Channel rack`, 'ok', 1400);
+  }
+  /** Add an instrument channel (registry plugin, Tri-Osc or Sampler), optionally with a preset. */
+  function addInstrument(pluginType: string, preset?: string) {
+    if (pluginType === 'triosc') {
+      addPresetChannel(preset ?? 'Init');
+      wm.show('channelrack');
+      return;
+    }
+    if (pluginType === 'sampler') {
+      addChannel('sampler', { name: 'Sampler' });
+      wm.show('channelrack');
+      toast('Added an empty Sampler — drop a sound on it', 'ok', 1600);
+      return;
+    }
+    const factory = preset ? pluginPresets(pluginType).find((p) => p.name === preset) : undefined;
+    store.begin('Add channel');
+    const id = addChannel('plugin', { pluginType, preset, group: 'Synths' });
+    if (factory) {
+      // user presets aren't known to the channel factory: load the state explicitly (same undo step)
+      store.live((p) => {
+        const c = p.channels.find((x) => x.id === id);
+        if (c?.plugin && c.plugin.preset !== factory.name) {
+          c.plugin.state = deepClone(factory.state);
+          c.plugin.preset = factory.name;
+          if (c.name === instInfo(pluginType)?.name) c.name = factory.name;
+        }
+      });
+    }
+    store.end();
+    wm.show('channelrack');
+    openPluginWindow(id, 'show');
+  }
+  function addEffect(type: string) {
+    const track = clamp(store.ui.selectedMixer, 0, store.project.mixer.length - 1);
+    addFx(track, type as FxType);
+    wm.show('mixer');
   }
   function replaceSample(ref: string, name: string) {
     const ch = store.selectedChannel;
@@ -584,7 +644,7 @@ export function createBrowser(): PanelDef {
       return;
     }
     if (ch.type !== 'sampler' || !ch.sampler) {
-      toast(`“${ch.name}” is a synth channel — double-click the sound to add it as a new channel`, 'warn', 3000);
+      toast(`“${ch.name}” isn't a Sampler channel — double-click the sound to add it as a new channel`, 'warn', 3000);
       return;
     }
     const b = ref.startsWith('builtin:') ? BUILTIN_BY_ID.get(ref.slice(8)) : undefined;
@@ -618,13 +678,31 @@ export function createBrowser(): PanelDef {
     });
     toast(`Preset “${name}” applied to ${autoNamed ? 'the selected synth' : '“' + ch.name + '”'}`, 'ok', 1400);
   }
-
-  function favRef(n: BNode | undefined): string | null {
-    if (!n) return null;
-    if (n.kind === 'sample') return n.ref ?? null;
-    if (n.kind === 'preset') return 'preset:' + n.preset;
-    return null;
+  function applyPluginPreset(pluginType: string, name: string) {
+    const ch = store.selectedChannel;
+    const pr = pluginPresets(pluginType).find((p) => p.name === name);
+    const plName = instInfo(pluginType)?.name ?? pluginType;
+    if (!pr) return;
+    if (!ch || ch.type !== 'plugin' || ch.plugin?.type !== pluginType) {
+      toast(`Select a ${plName} channel first — or double-click the preset to add a new one`, 'warn', 3000);
+      return;
+    }
+    store.commit('Load preset', (p) => {
+      const c = p.channels.find((x) => x.id === ch.id);
+      if (!c?.plugin) return;
+      c.plugin.state = deepClone(pr.state);
+      c.plugin.preset = pr.name;
+    });
+    toast(`Preset “${name}” loaded into “${ch.name}”`, 'ok', 1400);
   }
+  function openChannel(id: ID) {
+    store.setUI({ selectedChannels: [id], pianoRollChannel: id });
+    openPluginWindow(id, 'toggle');
+  }
+  function openRecent(n: BNode) {
+    if (n.index !== undefined && n.index < 10) commands.run('file.recent' + n.index);
+  }
+
   function toggleFav(n: BNode | undefined) {
     const r = favRef(n);
     if (!r) return;
@@ -662,11 +740,12 @@ export function createBrowser(): PanelDef {
       folders.push(dir);
       saveList('lf.folders', folders);
     }
-    open.add('sec:folders');
-    open.add('uf|' + dir);
+    if (tab !== 'all' && tab !== 'sounds') setTab('sounds');
+    open().add('sec:folders');
+    open().add('uf|' + dir);
     persistOpen();
     await scan(dir);
-    const n = byKey.get('uf|' + dir);
+    const n = tree.byKey.get('uf|' + dir);
     if (n) select(n, true);
     toast(`${basename(dir)}: ${plural(listings.get(dir)?.files.length ?? 0, 'sound')} found`, 'ok', 1800);
   }
@@ -686,10 +765,11 @@ export function createBrowser(): PanelDef {
       names.set(s.ref, s.name);
       if (!picked.some((x) => x.ref === s.ref)) picked.push(s);
     }
-    open.add('sec:folders');
+    if (tab !== 'all' && tab !== 'sounds') setTab('sounds');
+    open().add('sec:folders');
     persistOpen();
     rebuild();
-    select(byKey.get('uf|' + got[0].ref), true);
+    select(tree.byKey.get('uf|' + got[0].ref), true);
     toast(`${plural(got.length, 'sound')} added (kept for this session)`, 'ok', 1600);
   }
   function removeSession(listArr: DragSample[], ref: string) {
@@ -698,52 +778,96 @@ export function createBrowser(): PanelDef {
     rebuild();
   }
 
-  // ---------------- info strip ----------------
+  // ================= info panel =================
   let infoTok = 0;
   let infoPreview: Preview = { kind: 'none' };
-  function setInfo(icon: string, color: string | undefined, name: string, meta: string, pv: Preview, missing = false) {
-    infoIc.innerHTML = icon;
-    infoIc.style.setProperty('--c', color ?? 'var(--text-dim)');
-    infoName.textContent = name;
-    infoMeta.textContent = meta;
-    info.classList.toggle('missing', missing);
-    info.classList.toggle('idle', pv.kind === 'none');
+  function setInfo(o: { icon?: string; color?: string; rows: [string, string][]; pv?: Preview; thumb?: { url: string; w: number; h: number } | null; missing?: boolean }) {
+    infoMark.innerHTML = o.icon ?? '';
+    infoMark.style.setProperty('--c', o.color ?? '#8b979d');
+    infoRows.textContent = '';
+    for (const [k, v] of o.rows) infoRows.append(el('span', { class: 'br-ik', text: k }), el('span', { class: 'br-iv', text: v, title: v }));
+    const pv = o.pv ?? { kind: 'none' };
+    info.classList.toggle('missing', !!o.missing);
+    info.classList.toggle('idle', pv.kind === 'none' && !o.thumb);
+    info.classList.toggle('show-thumb', !!o.thumb);
+    if (o.thumb) {
+      infoThumb.src = o.thumb.url;
+      infoThumb.width = o.thumb.w * 1.5;
+      infoThumb.height = o.thumb.h * 1.5;
+    }
     infoPreview = pv;
     drawPreview(wave, pv);
   }
   function idleInfo() {
-    setInfo(BR.sample, undefined, 'Nothing selected', 'Click a sound to preview it', { kind: 'none' });
+    setInfo({ icon: '', rows: [['Title', 'Nothing selected'], ['Tip', 'Click a sound to preview it · double-click adds']] });
+  }
+  function pathOf(n: BNode): string {
+    if (n.ref?.startsWith('file:')) return n.ref.slice(5);
+    const parts: string[] = [];
+    for (let p = n.parent; p; p = p.parent) parts.unshift(p.label);
+    return parts.join(' › ') || n.where || '';
   }
   async function showInfo(n: BNode | undefined) {
     const tok = ++infoTok;
     if (!n || n.kind === 'empty') return idleInfo();
+    const path = pathOf(n);
     switch (n.kind) {
       case 'sample': {
         const ref = n.ref!;
-        setInfo(BR.sample, n.color, n.label, 'Loading…', { kind: 'none' });
+        const where = ref.startsWith('builtin:') ? 'Built-in sound · ' + sourceOf(ref) : ref.startsWith('embed:') ? 'Embedded / dropped file' : 'Audio file';
+        setInfo({ icon: BR.sample, color: n.color, rows: [['Title', n.label], ['Type', where], ['Size', 'Loading…'], ['Path', path]] });
         const b = await samples.ensure(ref);
         if (tok !== infoTok) return;
-        if (!b) return setInfo(BR.sample, n.color, n.label, 'Missing or unreadable file', { kind: 'none' }, true);
+        if (!b) return setInfo({ icon: BR.sample, color: n.color, rows: [['Title', n.label], ['Type', where], ['Size', 'Missing or unreadable file'], ['Path', path]], missing: true });
         const chs = b.numberOfChannels === 1 ? 'Mono' : b.numberOfChannels === 2 ? 'Stereo' : b.numberOfChannels + ' ch';
-        const pk = samples.peaks(ref, 200);
-        return setInfo(BR.sample, n.color, n.label, `${fmtDur(b.duration)} · ${chs} · ${(b.sampleRate / 1000).toFixed(1)} kHz`, pk ? { kind: 'peaks', data: pk, color: n.color ?? '#f6a432' } : { kind: 'none' });
+        const emb = samples.embedded.get(ref) as { data?: Uint8Array } | undefined;
+        const bytes = emb?.data?.length ?? b.length * b.numberOfChannels * 2 + 44;
+        const pk = samples.peaks(ref, 240);
+        return setInfo({
+          icon: BR.sample,
+          color: n.color,
+          rows: [['Title', n.label], ['Length', `${fmtDur(b.duration)} · ${chs} · ${(b.sampleRate / 1000).toFixed(1)} kHz`], ['Size', (emb?.data ? '' : '≈ ') + fmtBytes(bytes)], ['Path', path]],
+          pv: pk ? { kind: 'peaks', data: pk, color: n.color ?? '#f6a432' } : { kind: 'none' },
+        });
       }
       case 'preset': {
         const def = SYNTH_PRESETS.find((p) => p.name === n.preset);
-        return setInfo(n.icon ?? WAVE_ICON.sawtooth, SYNTH_COLOR, n.label, `Tri-Osc Synth · ${def?.desc ?? ''}`, { kind: 'line', data: synthCurve(synthPreset(n.preset!)), color: SYNTH_COLOR });
+        return setInfo({ icon: n.icon, color: n.color, rows: [['Title', n.label], ['Type', 'Tri-Osc Synth preset'], ['Info', def?.desc ?? ''], ['Path', path]], pv: { kind: 'line', data: synthCurve(synthPreset(n.preset!)), color: n.color ?? '#4fc6e6' } });
+      }
+      case 'plugpreset': {
+        const pl = instInfo(n.plugin);
+        return setInfo({ icon: pl?.icon, color: n.color, rows: [['Title', n.label], ['Type', `${pl?.name ?? n.plugin} preset`], ['Info', pl?.desc ?? ''], ['Path', path]], thumb: instrumentThumb(n.plugin!, n.color ?? '#9fb2c2') });
+      }
+      case 'plugin': {
+        const pl = instInfo(n.plugin);
+        const np = n.plugin === 'triosc' ? SYNTH_PRESETS.length : n.plugin === 'sampler' ? 0 : pluginPresets(n.plugin!).length;
+        return setInfo({
+          icon: n.icon,
+          color: n.color,
+          rows: [['Title', n.label], ['Type', `Instrument · ${pl?.category ?? ''}`], ['Info', `${pl?.desc ?? ''}${np ? ` · ${plural(np, 'preset')}` : ''}`], ['Path', path]],
+          thumb: instrumentThumb(n.plugin!, n.color ?? '#9fb2c2'),
+        });
+      }
+      case 'fx': {
+        const def = (FX_DEFS as Record<string, { desc: string; params: unknown[] } | undefined>)[n.fx!];
+        return setInfo({ icon: n.icon, color: n.color, rows: [['Title', n.label], ['Type', 'Effect'], ['Info', `${def?.desc ?? ''}${def ? ` · ${plural(def.params.length, 'parameter')}` : ''}`], ['Path', path]], thumb: effectThumb(n.fx!, n.color ?? '#9fb2c2') });
       }
       case 'channel': {
         const c = store.channel(n.id);
         if (!c) return idleInfo();
         const route = c.mixer > 0 ? `Insert ${c.mixer}` : 'Master';
-        if (c.type === 'synth' && c.synth) return setInfo(n.icon ?? '', c.color, c.name, `Tri-Osc Synth → ${route}`, { kind: 'line', data: synthCurve(c.synth), color: c.color });
+        const typ = c.type === 'plugin' ? instInfo(c.plugin?.type)?.name ?? 'Plugin' : c.type === 'synth' ? 'Tri-Osc Synth' : 'Sampler';
+        const notes = store.project.patterns.reduce((a, p) => a + (p.notes[c.id]?.length ?? 0), 0);
+        const rowsC: [string, string][] = [['Title', c.name], ['Type', `${typ} → ${route}`], ['Notes', `${plural(notes, 'note')} in ${plural(store.project.patterns.filter((p) => p.notes[c.id]?.length).length, 'pattern')}`]];
+        if (c.type === 'synth' && c.synth) return setInfo({ icon: n.icon, color: c.color, rows: [...rowsC, ['Path', 'Current project › Channels']], pv: { kind: 'line', data: synthCurve(c.synth), color: c.color } });
+        if (c.type === 'plugin') return setInfo({ icon: n.icon, color: c.color, rows: [...rowsC, ['Preset', c.plugin?.preset ?? '—']], thumb: instrumentThumb(c.plugin?.type ?? 'x', instInfo(c.plugin?.type)?.color ?? c.color) });
         const ref = c.sampler?.sampleRef;
-        setInfo(BR.sample, c.color, c.name, `Sampler · ${ref ? sampleName(ref) : 'empty'} → ${route}`, { kind: 'none' });
+        setInfo({ icon: BR.sample, color: c.color, rows: [...rowsC, ['Sample', ref ? sampleName(ref) : 'empty']] });
         if (!ref) return;
         const b = await samples.ensure(ref);
         if (tok !== infoTok || !b) return;
-        const pk = samples.peaks(ref, 200);
-        if (pk) setInfo(BR.sample, c.color, c.name, `Sampler · ${sampleName(ref)} · ${fmtDur(b.duration)} → ${route}`, { kind: 'peaks', data: pk, color: c.color });
+        const pk = samples.peaks(ref, 240);
+        if (pk) setInfo({ icon: BR.sample, color: c.color, rows: [...rowsC, ['Sample', `${sampleName(ref)} · ${fmtDur(b.duration)}`]], pv: { kind: 'peaks', data: pk, color: c.color } });
         return;
       }
       case 'pattern': {
@@ -759,95 +883,93 @@ export function createBrowser(): PanelDef {
         const len = store.patternLength(p);
         const bars = Math.round((len / store.barTicks) * 100) / 100;
         const i = store.project.patterns.indexOf(p);
-        return setInfo('<span class="br-swatch"></span>', p.color, p.name, `Pattern ${i + 1} · ${plural(bars, 'bar')} · ${plural(used, 'channel')} · ${plural(notes.length, 'note')}`, { kind: 'notes', notes, length: len, color: p.color });
+        const clips = store.project.playlist.clips.filter((c) => c.kind === 'pattern' && c.ref === p.id).length;
+        return setInfo({
+          icon: BI.pattern,
+          color: p.color,
+          rows: [['Title', p.name], ['Type', `Pattern ${i + 1} · ${plural(bars, 'bar')}`], ['Size', `${plural(used, 'channel')} · ${plural(notes.length, 'note')}`], ['Used', clips ? `${plural(clips, 'clip')} in the Playlist` : 'Not in the Playlist']],
+          pv: { kind: 'notes', notes, length: len, color: p.color },
+        });
       }
       case 'automation': {
         const a = store.project.automations.find((x) => x.id === n.id);
         if (!a) return idleInfo();
-        return setInfo(ICONS.automation, a.color, a.name, `Automation → ${describeTarget(a.target).name}`, { kind: 'auto', points: a.points, length: a.length, color: a.color });
+        return setInfo({ icon: ICONS.automation, color: a.color, rows: [['Title', a.name], ['Type', 'Automation clip'], ['Target', describeTarget(a.target).name], ['Points', String(a.points.length)]], pv: { kind: 'auto', points: a.points, length: a.length, color: a.color } });
       }
-      case 'section':
+      case 'mixfx':
+        return setInfo({ icon: n.icon, color: n.color, rows: [['Title', n.label], ['Type', 'Mixer effect · ' + (n.info ?? '')], ['Track', n.meta ?? ''], ['Path', 'Current project › Effects']], thumb: effectThumb(n.fx!, n.color ?? '#9fb2c2') });
+      case 'recent':
+        return setInfo({ icon: BI.project, color: n.color, rows: [['Title', n.label], ['Type', 'LoopForge project'], ['Open', n.meta ? `Double-click or ${n.meta}` : 'Double-click'], ['Path', n.path ?? '']] });
       case 'folder': {
         const count = n.files ?? n.children?.filter((c) => c.kind !== 'empty' && c.kind !== 'action').length ?? 0;
         const what = n.files !== undefined ? 'sound' : 'item';
-        const icon = n.icon ?? BR.folder;
-        return setInfo(icon, n.color ?? (n.kind === 'section' ? 'var(--accent)' : undefined), n.label, n.root && n.key === 'uf|' + n.root ? `${plural(count, what)} · ${n.root}` : plural(count, what), { kind: 'none' });
+        return setInfo({ icon: n.icon ?? BI.folder, color: n.color ?? n.tint, rows: [['Title', n.label], ['Type', 'Folder'], ['Size', plural(count, what)], ['Path', n.root && n.key === 'uf|' + n.root ? n.root : n.info ?? path]] });
       }
       case 'action':
-        return setInfo(n.icon ?? BR.plus, 'var(--accent2)', n.label, isElectron ? 'Pick a folder — its sub-folders are scanned for audio' : 'Pick audio files from disk (kept for this session)', { kind: 'none' });
+        return setInfo({ icon: n.icon, color: '#64c3e6', rows: [['Title', n.label], ['Info', isElectron ? 'Pick a folder — its sub-folders are scanned for audio' : 'Pick audio files from disk (kept for this session)']] });
     }
   }
 
-  // ---------------- context menus ----------------
+  // ================= context menus =================
   function menuFor(n: BNode, x: number, y: number) {
     const items: MenuItem[] = [];
     const ch = store.selectedChannel;
     const enterKey = commands.shortcutLabel('browser.enter');
     const addKey = commands.shortcutLabel('browser.addChannel');
-    const favItem = (): MenuItem => ({ label: isFavNode(n) ? 'Remove from favorites' : 'Add to favorites', action: () => toggleFav(n) });
+    const favItem = (): MenuItem => ({ label: isFav(n) ? 'Unstar' : 'Star (add to STARRED)', action: () => toggleFav(n) });
     switch (n.kind) {
       case 'sample':
         items.push(
           { label: 'Preview', action: () => void preview(n) },
           { label: 'Open in new channel', shortcut: addKey, action: () => addSampleChannel(n.ref!, n.label) },
-          {
-            label: ch?.type === 'sampler' ? `Replace sample in “${ch.name}”` : "Replace selected channel's sample",
-            shortcut: enterKey,
-            disabled: ch?.type !== 'sampler',
-            action: () => replaceSample(n.ref!, n.label),
-          },
+          { label: ch?.type === 'sampler' ? `Replace sample in “${ch.name}”` : "Replace selected channel's sample", shortcut: enterKey, disabled: ch?.type !== 'sampler', action: () => replaceSample(n.ref!, n.label) },
           { sep: true },
           favItem(),
         );
-        if (n.section === 'dropped') items.push({ label: 'Remove from list', action: () => removeSession(dropped, n.ref!) });
-        if (n.section === 'folders' && !isElectron) items.push({ label: 'Remove from list', action: () => removeSession(picked, n.ref!) });
+        if (dropped.some((s) => s.ref === n.ref)) items.push({ label: 'Remove from Dropped files', action: () => removeSession(dropped, n.ref!) });
+        if (!isElectron && picked.some((s) => s.ref === n.ref)) items.push({ label: 'Remove from Your files', action: () => removeSession(picked, n.ref!) });
         if (n.root) items.push({ sep: true }, { label: 'Refresh folder', action: () => void scan(n.root!) });
         break;
       case 'preset':
         items.push(
           { label: 'Open in new channel', shortcut: addKey, action: () => addPresetChannel(n.preset!) },
-          {
-            label: ch?.type === 'synth' ? `Apply to “${ch.name}”` : 'Apply to selected synth channel',
-            shortcut: enterKey,
-            disabled: ch?.type !== 'synth',
-            action: () => applyPreset(n.preset!),
-          },
+          { label: ch?.type === 'synth' ? `Apply to “${ch.name}”` : 'Apply to selected synth channel', shortcut: enterKey, disabled: ch?.type !== 'synth', action: () => applyPreset(n.preset!) },
           { sep: true },
           favItem(),
         );
         break;
-      case 'folder':
-      case 'section':
+      case 'plugpreset': {
+        const same = ch?.type === 'plugin' && ch.plugin?.type === n.plugin;
         items.push(
-          { label: open.has(n.key) ? 'Collapse' : 'Expand', action: () => toggle(n) },
-          { label: 'Expand all inside', action: () => setOpenDeep(n, true) },
-          { label: 'Collapse all inside', action: () => setOpenDeep(n, false) },
+          { label: 'Open in new channel', shortcut: addKey, action: () => addInstrument(n.plugin!, n.preset) },
+          { label: same ? `Load into “${ch!.name}”` : `Load into selected ${instInfo(n.plugin)?.name ?? ''} channel`, shortcut: enterKey, disabled: !same, action: () => applyPluginPreset(n.plugin!, n.preset!) },
+          { sep: true },
+          favItem(),
         );
+        break;
+      }
+      case 'plugin':
+        items.push({ label: 'Add to Channel rack', shortcut: enterKey, action: () => addInstrument(n.plugin!) });
+        if (n.plugin !== 'sampler') {
+          items.push({ label: 'Show presets', action: () => revealPresets(n.plugin!) });
+        }
+        items.push({ sep: true }, favItem());
+        break;
+      case 'fx': {
+        const t = clamp(store.ui.selectedMixer, 0, store.project.mixer.length - 1);
+        const m = store.project.mixer[t];
+        items.push({ label: `Add to ${t === 0 ? 'Master' : m?.name ?? 'Insert ' + t}`, shortcut: enterKey, action: () => addEffect(n.fx!) }, { label: 'Show Mixer', action: () => wm.show('mixer') }, { sep: true }, favItem());
+        break;
+      }
+      case 'folder':
+        items.push({ label: open().has(n.key) ? 'Close' : 'Open', action: () => toggle(n) }, { label: 'Open all inside', action: () => setOpenDeep(n, true) }, { label: 'Close all inside', action: () => setOpenDeep(n, false) });
         if (n.root) {
           items.push({ sep: true }, { label: 'Refresh', action: () => void scan(n.root!) });
           if (n.key === 'uf|' + n.root) items.push({ label: 'Remove from browser', action: () => removeFolder(n.root!) });
         }
         if (n.key === 'sec:folders') items.push({ sep: true }, { label: isElectron ? 'Add folder…' : 'Add audio files…', action: () => void (isElectron ? addFolder() : addFiles()) });
-        if (n.key === 'sec:favs')
-          items.push({ sep: true }, {
-            label: 'Clear favorites',
-            disabled: !favs.length,
-            action: () => {
-              favs.length = 0;
-              favSet = new Set();
-              saveList('lf.favs', favs);
-              rebuild();
-            },
-          });
-        if (n.key === 'sec:dropped')
-          items.push({ sep: true }, {
-            label: 'Clear list',
-            disabled: !dropped.length,
-            action: () => {
-              dropped.length = 0;
-              rebuild();
-            },
-          });
+        if (n.key === 'sec:starred') items.push({ sep: true }, { label: 'Clear starred', disabled: !favs.length, action: clearStarred });
+        if (n.key === 'sec:dropped') items.push({ sep: true }, { label: 'Clear list', disabled: !dropped.length, action: () => { dropped.length = 0; rebuild(); } });
         break;
       case 'pattern':
         items.push(
@@ -864,12 +986,18 @@ export function createBrowser(): PanelDef {
       case 'channel':
         items.push(
           { label: 'Select channel', action: () => activate(n) },
-          { label: 'Channel settings…', action: () => openChannelSettings(n.id!) },
+          { label: 'Instrument window', action: () => openChannel(n.id!) },
           { label: 'Open in Piano roll', action: () => { store.setUI({ selectedChannels: [n.id!], pianoRollChannel: n.id! }); wm.show('pianoroll'); } },
         );
         break;
       case 'automation':
         items.push({ label: 'Use as Playlist clip source', action: () => activate(n) }, { label: 'Show Playlist', action: () => wm.show('playlist') });
+        break;
+      case 'mixfx':
+        items.push({ label: 'Open effect window', action: () => openFxWindow(n.id!, 'show') }, { label: 'Select mixer track', action: () => { activate(n); wm.show('mixer'); } });
+        break;
+      case 'recent':
+        items.push({ label: 'Open project', shortcut: n.meta, action: () => openRecent(n) });
         break;
       case 'action':
         items.push({ label: n.label, action: () => n.run?.() });
@@ -877,16 +1005,25 @@ export function createBrowser(): PanelDef {
     }
     if (items.length) showMenu(items, x, y);
   }
-  function openChannelSettings(id: ID) {
-    store.setUI({ settingsChannel: id });
-    wm.show('channelsettings');
+  function clearStarred() {
+    favs.length = 0;
+    favSet = new Set();
+    saveList('lf.favs', favs);
+    rebuild();
+  }
+  function revealPresets(pluginType: string) {
+    setTab('library');
+    const key = pluginType === 'triosc' ? 'lib/triosc' : 'lib/pl/' + pluginType;
+    const n = tree.byKey.get(key);
+    if (!n) return;
+    setOpenDeep(n, true);
+    reveal(n);
   }
 
-  // ---------------- interaction ----------------
+  // ================= interaction =================
   function activate(n: BNode, clicks = 1) {
     select(n);
     switch (n.kind) {
-      case 'section':
       case 'folder':
         if (clicks < 2) toggle(n);
         break;
@@ -905,12 +1042,40 @@ export function createBrowser(): PanelDef {
       case 'automation':
         store.setUI({ plSource: { kind: 'automation', ref: n.id! } });
         break;
+      case 'mixfx':
+        store.setUI({ selectedMixer: n.track!, selectedMixerTracks: [n.track!] });
+        break;
+    }
+  }
+  /** Double-click / Shift+Enter: put the item to use. */
+  function use(n: BNode) {
+    switch (n.kind) {
+      case 'sample':
+        return addSampleChannel(n.ref!, n.label);
+      case 'preset':
+        return addPresetChannel(n.preset!);
+      case 'plugpreset':
+        return addInstrument(n.plugin!, n.preset);
+      case 'plugin':
+        return addInstrument(n.plugin!);
+      case 'fx':
+        return addEffect(n.fx!);
+      case 'channel':
+        return openChannel(n.id!);
+      case 'pattern':
+        return wm.show('channelrack');
+      case 'automation':
+        return wm.show('playlist');
+      case 'mixfx':
+        return openFxWindow(n.id!, 'show');
+      case 'recent':
+        return openRecent(n);
     }
   }
 
   const nodeOf = (t: EventTarget | null): BNode | undefined => {
     const r = t instanceof Element ? (t.closest('.br-row') as HTMLElement | null) : null;
-    return r ? byKey.get(r.dataset.key ?? '') : undefined;
+    return r ? tree.byKey.get(r.dataset.key ?? '') : undefined;
   };
   layer.addEventListener('mousedown', (e) => {
     const n = nodeOf(e.target);
@@ -931,36 +1096,41 @@ export function createBrowser(): PanelDef {
   layer.addEventListener('dblclick', (e) => {
     const n = nodeOf(e.target);
     if (!n || (e.target as Element).closest('.br-star')) return;
-    if (n.kind === 'sample') addSampleChannel(n.ref!, n.label);
-    else if (n.kind === 'preset') addPresetChannel(n.preset!);
-    else if (n.kind === 'channel') openChannelSettings(n.id!);
-    else if (n.kind === 'pattern') wm.show('channelrack');
-    else if (n.kind === 'automation') wm.show('playlist');
+    use(n);
   });
   list.addEventListener('contextmenu', (e) => {
     e.preventDefault();
     const n = nodeOf(e.target);
     if (n) menuFor(n, e.clientX, e.clientY);
-    else
-      showMenu(
-        [
-          { label: isElectron ? 'Add folder…' : 'Add audio files…', action: () => void (isElectron ? addFolder() : addFiles()) },
-          { label: 'Collapse all', action: collapseAll },
-        ],
-        e.clientX,
-        e.clientY,
-      );
+    else showMenu(browserMenu(), e.clientX, e.clientY);
   });
   layer.addEventListener('dragstart', (e) => {
     const r = e.target instanceof Element ? (e.target.closest('.br-row') as RowEl | null) : null;
     const n = nodeOf(e.target);
     if (!r || !n) return;
-    if (n.kind === 'sample') setDragData(e, DT_SAMPLE, { ref: n.ref, name: n.label });
-    else if (n.kind === 'preset') setDragData(e, DT_PRESET, { preset: n.preset, name: n.preset });
-    else if (n.kind === 'pattern') setDragData(e, DT_PATTERN, { id: n.id, name: n.label });
-    else {
-      e.preventDefault();
-      return;
+    switch (n.kind) {
+      case 'sample':
+        setDragData(e, DT_SAMPLE, { ref: n.ref, name: n.label });
+        break;
+      case 'preset':
+        setDragData(e, DT_PRESET, { preset: n.preset, name: n.preset });
+        break;
+      case 'plugpreset':
+        setDragData(e, DT_PLUGIN, { pluginType: n.plugin, preset: n.preset, name: n.preset });
+        break;
+      case 'plugin':
+        // DT_PLUGIN { pluginType } — a registry id, 'triosc' or 'sampler' (the Channel rack resolves all three)
+        setDragData(e, DT_PLUGIN, { pluginType: n.plugin, name: n.label });
+        break;
+      case 'fx':
+        setDragData(e, DT_FX, { type: n.fx, name: n.label });
+        break;
+      case 'pattern':
+        setDragData(e, DT_PATTERN, { id: n.id, name: n.label });
+        break;
+      default:
+        e.preventDefault();
+        return;
     }
     dragRow = r;
     if (n.key !== selKey) select(n);
@@ -1003,14 +1173,15 @@ export function createBrowser(): PanelDef {
       names.set(s.ref, s.name);
       if (!dropped.some((x) => x.ref === s.ref)) dropped.push(s);
     }
-    open.add('sec:dropped');
+    if (tab !== 'all' && tab !== 'sounds') setTab('sounds');
+    open().add('sec:dropped');
     persistOpen();
     if (query) {
       input.value = '';
       onQuery();
     }
     rebuild();
-    const first = byKey.get('drop|' + got[0].ref);
+    const first = tree.byKey.get('drop|' + got[0].ref);
     if (first) {
       select(first, true);
       void preview(first);
@@ -1018,7 +1189,7 @@ export function createBrowser(): PanelDef {
     toast(`${plural(got.length, 'sound')} added to Dropped files`, 'ok', 1500);
   });
 
-  // ---------------- search box ----------------
+  // ================= search / TAGS bar =================
   function onQuery() {
     const q = input.value.trim();
     if (q === query) return;
@@ -1031,6 +1202,7 @@ export function createBrowser(): PanelDef {
       void showInfo(rows[0]);
     } else if (!q) {
       revealSel();
+      flatten();
       requestAnimationFrame(() => ensureVisible(rows.findIndex((r) => r.key === selKey)));
     }
     render();
@@ -1051,11 +1223,7 @@ export function createBrowser(): PanelDef {
       e.preventDefault();
       const n = cur() ?? rows[0];
       if (!n) return;
-      if (e.shiftKey) {
-        if (n.kind === 'sample') addSampleChannel(n.ref!, n.label);
-        else if (n.kind === 'preset') addPresetChannel(n.preset!);
-        return;
-      }
+      if (e.shiftKey) return use(n);
       select(n, true);
       if (n.kind === 'sample') void preview(n);
       input.blur();
@@ -1066,8 +1234,22 @@ export function createBrowser(): PanelDef {
     onQuery();
     input.focus();
   });
+  findBtn.addEventListener('click', () => {
+    input.focus();
+    input.select();
+  });
+  folderBtn.addEventListener('click', () => void (isElectron ? addFolder() : addFiles()));
+  tagsBtn.addEventListener('click', () => {
+    const r = tagsBtn.getBoundingClientRect();
+    const items: MenuItem[] = TAGS.map((t) => ({ label: t, checked: query.toLowerCase() === t.toLowerCase(), action: () => { input.value = t; onQuery(); } }));
+    items.push({ sep: true }, { label: 'Clear filter', disabled: !query, action: () => { input.value = ''; onQuery(); } });
+    const m = showMenu(items, r.left, r.top);
+    // open upwards: the bar sits at the bottom of the window
+    const mr = m.getBoundingClientRect();
+    m.style.top = Math.max(0, r.top - mr.height - 2) + 'px';
+  });
 
-  // ---------------- keyboard API ----------------
+  // ================= keyboard API =================
   function move(d: 1 | -1, pv: boolean) {
     if (!rows.length) return;
     const i = selKey ? rows.findIndex((r) => r.key === selKey) : -1;
@@ -1084,14 +1266,14 @@ export function createBrowser(): PanelDef {
       const n = cur();
       if (!n || !rows.includes(n)) return move(1, false);
       if (query) return;
-      if (n.children && open.has(n.key)) setOpen(n, false);
+      if (n.children && open().has(n.key)) setOpen(n, false);
       else if (n.parent) select(n.parent, true);
     },
     right() {
       const n = cur();
       if (!n || !rows.includes(n)) return move(1, false);
       if (query || !n.children) return;
-      if (!open.has(n.key)) setOpen(n, true);
+      if (!open().has(n.key)) setOpen(n, true);
       else {
         const first = n.children.find((c) => c.kind !== 'empty');
         if (first) select(first, true);
@@ -1105,7 +1287,15 @@ export function createBrowser(): PanelDef {
           return replaceSample(n.ref!, n.label);
         case 'preset':
           return applyPreset(n.preset!);
-        case 'section':
+        case 'plugpreset': {
+          const ch = store.selectedChannel;
+          if (ch?.type === 'plugin' && ch.plugin?.type === n.plugin) return applyPluginPreset(n.plugin!, n.preset!);
+          return addInstrument(n.plugin!, n.preset);
+        }
+        case 'plugin':
+        case 'fx':
+        case 'recent':
+          return use(n);
         case 'folder':
           return toggle(n);
         case 'action':
@@ -1113,13 +1303,13 @@ export function createBrowser(): PanelDef {
         case 'channel':
         case 'pattern':
         case 'automation':
+        case 'mixfx':
           return activate(n);
       }
     },
     addSel() {
       const n = cur();
-      if (n?.kind === 'sample') addSampleChannel(n.ref!, n.label);
-      else if (n?.kind === 'preset') addPresetChannel(n.preset!);
+      if (n) use(n);
     },
     favSel() {
       toggleFav(cur());
@@ -1134,27 +1324,92 @@ export function createBrowser(): PanelDef {
       onQuery();
     },
     searching: () => !!query,
+    tab(d) {
+      const i = TABS.findIndex((t) => t.id === tab);
+      setTab(TABS[(i + d + TABS.length) % TABS.length].id);
+    },
   };
   registerCommands();
 
-  // ---------------- store wiring ----------------
+  // ================= header (window title bar) =================
+  function browserMenu(): MenuItem[] {
+    return [
+      { label: 'Show plugin thumbnails', checked: thumbs, action: () => { thumbs = !thumbs; saveStr('lf.browser.thumbs', thumbs ? '1' : '0'); rebuild(); } },
+      { label: 'Tab', submenu: TABS.map((t) => ({ label: t.label, checked: t.id === tab, action: () => setTab(t.id) })) },
+      { sep: true },
+      { label: 'Close all folders', action: collapseAll },
+      { label: "Reveal selected channel's sound / plugin", action: locate },
+      { sep: true },
+      { label: isElectron ? 'Add folder…' : 'Add audio files…', action: () => void (isElectron ? addFolder() : addFiles()) },
+      ...(isElectron ? [{ label: 'Refresh all folders', disabled: !folders.length, action: () => folders.forEach((d) => void scan(d)) }] : []),
+      { label: 'Clear dropped files', disabled: !dropped.length, action: () => { dropped.length = 0; rebuild(); } },
+      { label: 'Clear starred', disabled: !favs.length, action: clearStarred },
+    ];
+  }
+  /** Find the selected channel's sound / preset / instrument in the browser. */
+  function locate() {
+    const ch = store.selectedChannel;
+    if (!ch) return toast('No channel selected', 'warn');
+    const match = (n: BNode) => {
+      if (ch.type === 'sampler') return n.kind === 'sample' && !!ch.sampler?.sampleRef && n.ref === ch.sampler.sampleRef;
+      if (ch.type === 'plugin') return (n.kind === 'plugpreset' && n.plugin === ch.plugin?.type && n.preset === ch.plugin?.preset) || (n.kind === 'plugin' && n.plugin === ch.plugin?.type);
+      return (n.kind === 'preset' && n.preset === ch.name) || (n.kind === 'plugin' && n.plugin === 'triosc');
+    };
+    const find = () => {
+      let best: BNode | undefined;
+      for (const r of tree.roots)
+        walk(r, (n) => {
+          if (!best && match(n) && n.kind !== 'plugin') best = n;
+        });
+      if (!best) for (const r of tree.roots) walk(r, (n) => (best ??= match(n) ? n : undefined));
+      return best;
+    };
+    let n = find();
+    if (!n && tab !== 'all') {
+      setTab('all');
+      n = find();
+    }
+    if (!n) return toast(`Couldn't find “${ch.name}”'s sound in the browser`, 'info', 1800);
+    reveal(n);
+  }
+  const menuBtn = iconBtn(BI.menu, 'Browser options — thumbnails, tabs, folders', (e) => showMenu(browserMenu(), e.clientX, e.clientY + 8), 'br-hbtn');
+  const upBtn = iconBtn(
+    BI.up,
+    'Go up — close the selected folder or select its parent (all folders close when nothing is selected)',
+    () => {
+      const n = cur();
+      if (!n) return collapseAll();
+      const f = n.children && open().has(n.key) ? n : n.parent;
+      if (!f) return collapseAll();
+      setOpen(f, false);
+      select(f, true);
+    },
+    'br-hbtn',
+  );
+  const locBtn = iconBtn(BI.locate, "Reveal the selected channel's sound, preset or plugin", locate, 'br-hbtn');
+  const headerExtra = el('div', { class: 'br-hx' }, menuBtn, upBtn, locBtn);
+
+  // ================= store wiring =================
   const sigOf = () => {
     const p = store.project;
     if (!p) return '';
     return (
-      p.channels.map((c) => `${c.id}:${c.name}:${c.color}:${c.type}:${c.mixer}:${c.type === 'synth' ? c.synth?.osc.find((o) => o.level > 0)?.wave : ''}`).join('|') +
+      p.channels.map((c) => `${c.id}:${c.name}:${c.color}:${c.type}:${c.mixer}:${c.plugin?.type ?? ''}:${c.type === 'synth' ? c.synth?.osc.find((o) => o.level > 0)?.wave : ''}`).join('|') +
       '#' +
       p.patterns.map((x) => `${x.id}:${x.name}:${x.color}`).join('|') +
       '#' +
-      p.automations.map((a) => `${a.id}:${a.name}:${a.color}`).join('|')
+      p.automations.map((a) => `${a.id}:${a.name}:${a.color}`).join('|') +
+      '#' +
+      p.mixer.map((m, i) => `${i}:${m.name}:${m.fx.map((f) => f.id + f.type + (f.enabled ? 1 : 0)).join(',')}`).join('|')
     );
   };
+  const regSigOf = () => `${allInstruments().map((p) => p.id).join(',')}|${FX_ORDER.join(',')}`;
   let infoRaf = 0;
   store.on('project', () => {
     const s = sigOf();
     if (s !== projSig) {
       projSig = s;
-      rebuild();
+      if (tab === 'all' || tab === 'project') rebuild();
     }
     const n = cur();
     if (n && (n.kind === 'channel' || n.kind === 'pattern' || n.kind === 'automation') && !infoRaf)
@@ -1172,23 +1427,20 @@ export function createBrowser(): PanelDef {
     }
   });
   store.on('ui', (keys) => {
-    if (keys.includes('currentPattern') || keys.includes('selectedChannels') || keys.includes('plSource')) renderSoon();
+    if (keys.includes('currentPattern') || keys.includes('selectedChannels') || keys.includes('plSource') || keys.includes('selectedMixer')) renderSoon();
   });
 
-  new ResizeObserver(() => renderSoon()).observe(list);
+  new ResizeObserver(() => {
+    fitTabs();
+    renderSoon();
+  }).observe(root);
   new ResizeObserver(() => drawPreview(wave, infoPreview)).observe(wave);
 
-  // ---------------- header extra ----------------
-  const headerExtra = el(
-    'div',
-    { class: 'br-hx' },
-    iconBtn(isElectron ? BR.addFolder : BR.plus, isElectron ? 'Add a folder of sounds to the browser' : 'Add audio files to the browser (kept for this session)', () => void (isElectron ? addFolder() : addFiles()), 'br-hbtn'),
-    iconBtn(BR.collapse, 'Collapse all folders', collapseAll, 'br-hbtn'),
-  );
-
-  // ---------------- init ----------------
+  // ================= init =================
   projSig = sigOf();
-  buildTree();
+  regSig = regSigOf();
+  paintTabs();
+  tree = buildTab(tab, env, thumbs);
   flatten();
   idleInfo();
   for (const dir of folders) void scan(dir);
@@ -1197,9 +1449,19 @@ export function createBrowser(): PanelDef {
     body: root,
     headerExtra,
     onShow: () => {
+      // plugins / effects registered after startup show up the next time the browser opens
+      const rs = regSigOf();
+      if (rs !== regSig || tab === 'library' || tab === 'starred') {
+        regSig = rs;
+        rebuild();
+      }
+      fitTabs();
       render();
       drawPreview(wave, infoPreview);
     },
-    onResize: renderSoon,
+    onResize: () => {
+      fitTabs();
+      renderSoon();
+    },
   };
 }

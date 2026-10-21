@@ -70,6 +70,48 @@ export const SYNTH_COLOR = '#4fc6e6';
 export const SAMPLER_COLOR = '#79d85a';
 export const SAMPLER_ICON = s('<rect x="3" y="5" width="18" height="14" rx="2.5"/><path d="M6 12h1.5l1.5-3 2 6 2-8 2 7 1.5-2H18"/>');
 
+const f = (d: string) => `<svg viewBox="0 0 24 24" fill="currentColor">${d}</svg>`;
+
+/** FL-style colour coding of the browser's top-level entries (text + icon). */
+export const BR_TINT = {
+  project: '#dcae95',
+  recent: '#9fc679',
+  plugins: '#b4d3f0',
+  pluginsDim: '#8eabcb',
+  library: '#cdd6dc',
+  user: '#cdd6dc',
+  starred: '#ecd36a',
+  leaf: '#cfd3d6',
+};
+
+/** Browser tree glyphs (filled where FL uses solid icons). */
+export const BI = {
+  page: f('<path d="M5 2.5h9.2L19 7.3V21.5H5z" opacity=".95"/><path d="M14 2.5v5h5" fill="none" stroke="#000" stroke-opacity=".35" stroke-width="1.2"/>'),
+  recent: s('<path d="M3 6.5A1.5 1.5 0 0 1 4.5 5H9l2 2h8.5A1.5 1.5 0 0 1 21 8.5v9a1.5 1.5 0 0 1-1.5 1.5h-15A1.5 1.5 0 0 1 3 17.5z"/><path d="M9 13.2a3.2 3.2 0 1 0 1-2.3"/><path d="M9.6 9.4v2h2"/>'),
+  plugDb: f('<path d="M3 9h4.2L13 4.2v15.6L7.2 15H3z"/><path d="M16 8.6c1.2 1 1.8 2.2 1.8 3.4s-.6 2.4-1.8 3.4" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/><path d="M18.6 6c2 1.6 3 3.6 3 6s-1 4.4-3 6" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" opacity=".6"/>'),
+  plug: f('<rect x="8.2" y="2.5" width="2" height="5" rx=".8"/><rect x="13.8" y="2.5" width="2" height="5" rx=".8"/><path d="M6.5 7.5h11v3.2a5.5 5.5 0 0 1-4.4 5.4V21.5h-2.2v-5.4a5.5 5.5 0 0 1-4.4-5.4z"/>'),
+  presets: f('<path d="M4 3.5h11l4 4V20.5H4z" opacity=".9"/><path d="M7 11h9M7 14h9M7 17h6" stroke="#000" stroke-opacity=".4" stroke-width="1.4"/>'),
+  packs: f('<path d="M12 2.8l8.4 4.2L12 11.2 3.6 7z"/><path d="M3.6 9.6l7.6 3.8v8.2l-7.6-3.8z" opacity=".75"/><path d="M20.4 9.6l-7.6 3.8v8.2l7.6-3.8z" opacity=".55"/>'),
+  folder: f('<path d="M2.8 6.2A1.4 1.4 0 0 1 4.2 4.8h4.6l2 2h9a1.4 1.4 0 0 1 1.4 1.4v10.4a1.4 1.4 0 0 1-1.4 1.4H4.2a1.4 1.4 0 0 1-1.4-1.4z"/>'),
+  folderOpen: f('<path d="M2.8 6.2A1.4 1.4 0 0 1 4.2 4.8h4.6l2 2h7.6a1.4 1.4 0 0 1 1.4 1.4V10H7.2a1.6 1.6 0 0 0-1.5 1.1L2.8 19z" opacity=".7"/><path d="M6.4 11.2h15.4L18.6 20H3.6z"/>'),
+  tray: f('<path d="M3 13.5h5l1.2 2.2h5.6l1.2-2.2h5V20H3z"/><path d="M12 3.2v8.2M8.6 8.2L12 11.6l3.4-3.4" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>'),
+  star: f('<path d="M12 2.8l2.8 5.8 6.3.9-4.6 4.4 1.1 6.3L12 17.2l-5.6 3 1.1-6.3-4.6-4.4 6.3-.9z"/>'),
+  keys: f('<rect x="2.5" y="5" width="19" height="14" rx="1.6" opacity=".95"/><path d="M8.2 12v7M12 12v7M15.8 12v7" stroke="#000" stroke-opacity=".45" stroke-width="1.2"/><rect x="6.6" y="5" width="2.8" height="7" fill="#000" fill-opacity=".55"/><rect x="14.6" y="5" width="2.8" height="7" fill="#000" fill-opacity=".55"/>'),
+  knob: f('<circle cx="12" cy="12" r="8.6" opacity=".95"/><path d="M12 12L7.2 7.2" stroke="#000" stroke-opacity=".55" stroke-width="2.2" stroke-linecap="round"/>'),
+  gear: f('<path d="M10.4 2.6h3.2l.5 2.4 1.7.8 2.1-1.3 2.3 2.3-1.3 2.1.8 1.7 2.4.5v3.2l-2.4.5-.8 1.7 1.3 2.1-2.3 2.3-2.1-1.3-1.7.8-.5 2.4h-3.2l-.5-2.4-1.7-.8-2.1 1.3-2.3-2.3 1.3-2.1-.8-1.7-2.4-.5v-3.2l2.4-.5.8-1.7-1.3-2.1 2.3-2.3 2.1 1.3 1.7-.8z"/><circle cx="12" cy="12" r="3.2" fill="#000" fill-opacity=".5"/>'),
+  rack: s('<rect x="3" y="4" width="18" height="16" rx="1.6"/><path d="M3 9.3h18M3 14.6h18M8 4v16"/>'),
+  pattern: f('<rect x="3" y="4" width="18" height="16" rx="2" opacity=".35"/><rect x="5.5" y="7" width="4" height="3" rx=".6"/><rect x="11" y="7" width="4" height="3" rx=".6"/><rect x="8" y="11" width="4" height="3" rx=".6"/><rect x="14" y="14.5" width="4" height="3" rx=".6"/>'),
+  mixer: s('<path d="M6 4v16M12 4v16M18 4v16"/><rect x="4" y="13" width="4" height="3" rx="1" fill="currentColor"/><rect x="10" y="7" width="4" height="3" rx="1" fill="currentColor"/><rect x="16" y="11" width="4" height="3" rx="1" fill="currentColor"/>'),
+  project: f('<path d="M5 2.5h9.2L19 7.3V21.5H5z" opacity=".95"/><path d="M8.5 16.5V10l7-1.4v6.4" fill="none" stroke="#000" stroke-opacity=".45" stroke-width="1.5"/><circle cx="7.6" cy="16.6" r="1.4" fill="#000" fill-opacity=".45"/><circle cx="14.6" cy="15.2" r="1.4" fill="#000" fill-opacity=".45"/>'),
+  locate: s('<circle cx="12" cy="12" r="6.5"/><circle cx="12" cy="12" r="2" fill="currentColor"/><path d="M12 2.5v3M12 18.5v3M2.5 12h3M18.5 12h3"/>'),
+  up: s('<path d="M12 19.5V5M6 10.5l6-6 6 6"/>'),
+  menu: `<svg viewBox="0 0 16 16"><path d="M5.5 3.5l5 4.5-5 4.5z" fill="currentColor"/></svg>`,
+  caretDown: `<svg viewBox="0 0 16 16"><path d="M4 6l4 4.5L12 6z" fill="currentColor"/></svg>`,
+  caretRight: `<svg viewBox="0 0 16 16"><path d="M6 4l4.5 4L6 12z" fill="currentColor"/></svg>`,
+  search: s('<circle cx="10.5" cy="10.5" r="6"/><path d="M15 15l5.5 5.5"/>'),
+  folderSmall: s('<path d="M3 6.5A1.5 1.5 0 0 1 4.5 5H9l2 2h8.5A1.5 1.5 0 0 1 21 8.5v9a1.5 1.5 0 0 1-1.5 1.5h-15A1.5 1.5 0 0 1 3 17.5z"/>'),
+};
+
 /** Small glyphs used by tree rows. */
 export const BR = {
   chevron: `<svg viewBox="0 0 16 16"><path d="M6 4l4 4-4 4" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg>`,
