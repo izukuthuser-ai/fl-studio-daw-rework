@@ -15,7 +15,7 @@ import { exportMidi, importMidi } from './fileops';
 import type { PanelDef } from './panel';
 import * as ops from './pianoRoll-ops';
 import { CHORDS, ROOT_NAMES, SCALES, chordKeys, scaleMask, snapToScale } from './pianoRoll-theory';
-import { View, drawGrid, drawKeys, drawLane, drawRuler, lineSpacing, tickX, xTick, yKey } from './pianoRoll-render';
+import { View, drawGrid, drawKeys, drawLane, drawOverview, drawRuler, lineSpacing, overviewSpan, tickX, xTick, yKey } from './pianoRoll-render';
 
 const FL_NOTE = '#86d66d';
 import { Field, formDialog } from './pianoRoll-dialogs';
@@ -51,6 +51,10 @@ const GRID_CHOICES: Snap[] = ['1/6step', '1/4step', '1/3step', '1/2step', 'step'
 
 const svgI = (d: string) => `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">${d}</svg>`;
 const IC = {
+  arrow: `<svg viewBox="0 0 24 24"><path d="M8 5l9 7-9 7z" fill="currentColor"/></svg>`,
+  left: `<svg viewBox="0 0 24 24"><path d="M15 6l-7 6 7 6z" fill="currentColor"/></svg>`,
+  right: `<svg viewBox="0 0 24 24"><path d="M9 6l7 6-7 6z" fill="currentColor"/></svg>`,
+  stamp: svgI('<path d="M9 3h6v6l3 3H6l3-3z"/><path d="M5 15h14v3H5z"/><path d="M8 21h8"/>'),
   lane: svgI('<path d="M5 20v-7M10 20V6M15 20v-9M20 20V9"/><circle cx="5" cy="12" r="1.4" fill="currentColor"/><circle cx="10" cy="5" r="1.4" fill="currentColor"/><circle cx="15" cy="10" r="1.4" fill="currentColor"/><circle cx="20" cy="8" r="1.4" fill="currentColor"/>'),
   zoomIn: svgI('<circle cx="10.5" cy="10.5" r="6.5"/><path d="M15.5 15.5L21 21M8 10.5h5M10.5 8v5"/>'),
   zoomOut: svgI('<circle cx="10.5" cy="10.5" r="6.5"/><path d="M15.5 15.5L21 21M8 10.5h5"/>'),
@@ -186,7 +190,11 @@ class PianoRoll {
   private keys: Surface;
   private ruler: Surface;
   private lane: Surface;
-  private corner: HTMLElement;
+  private ovw: Surface;
+  private chBox: HTMLElement;
+  private chName: HTMLElement;
+  private chKey: HTMLElement;
+  private laneName: HTMLElement;
   private phGrid: HTMLElement;
   private phLane: HTMLElement;
   private phTri: HTMLElement;
@@ -195,63 +203,74 @@ class PianoRoll {
   private vs: HTMLElement;
   private vThumb: HTMLElement;
   private status: HTMLElement;
-  private bar: BarApi;
-  private laneTabs: HTMLElement[] = [];
+  bar: BarApi;
 
   constructor() {
     const gridWrap = el('div', { class: 'pr-cv pr-grid' });
     const keysWrap = el('div', { class: 'pr-cv pr-keys', 'data-hint': 'Piano keyboard — click or drag to audition (further right = louder) · Ctrl+click selects every note of that key' });
     const rulerWrap = el('div', { class: 'pr-cv pr-ruler', 'data-hint': 'Timeline — click / drag to set the playback position · Ctrl+drag selects a time range (and the notes in it) · wheel zooms' });
     const laneWrap = el('div', { class: 'pr-cv pr-lane' });
+    const ovwWrap = el('div', { class: 'pr-cv pr-ovw', 'data-hint': 'Overview of every note — drag the box to scroll, click to jump there · wheel zooms' });
     this.grid = new Surface(gridWrap);
     this.keys = new Surface(keysWrap);
     this.ruler = new Surface(rulerWrap);
     this.lane = new Surface(laneWrap);
+    this.ovw = new Surface(ovwWrap);
     this.phGrid = el('div', { class: 'pr-ph' });
     this.phLane = el('div', { class: 'pr-ph' });
     this.phTri = el('div', { class: 'pr-ph-tri' });
     gridWrap.append(this.phGrid);
     laneWrap.append(this.phLane);
     rulerWrap.append(this.phTri);
-    this.corner = el('div', { class: 'pr-corner', 'data-hint': 'Key under the mouse' });
+    // FL: the overview strip has page arrows on both ends
+    const ovL = el('button', { class: 'pr-ovw-btn l', html: IC.left, 'data-hint': 'Scroll left one page' });
+    const ovR = el('button', { class: 'pr-ovw-btn r', html: IC.right, 'data-hint': 'Scroll right one page' });
+    ovL.addEventListener('click', () => this.scrollBy((-this.grid.w * 0.9) / this.zx, 0));
+    ovR.addEventListener('click', () => this.scrollBy((this.grid.w * 0.9) / this.zx, 0));
+    const ovwBox = el('div', { class: 'pr-ovw-box' }, ovL, ovwWrap, ovR);
+    // top-left: the channel being edited (click for the channel list) + key under the mouse
+    this.chName = el('span', { class: 'pr-chbox-name' });
+    this.chKey = el('span', { class: 'pr-chbox-key' });
+    this.chBox = el('div', { class: 'pr-chbox', 'data-hint': 'Channel being edited — click to pick another channel · shows the key under the mouse' }, el('span', { class: 'pr-chbox-wedge' }), el('div', { class: 'pr-chbox-t' }, this.chName, this.chKey));
+    this.chBox.addEventListener('click', () => {
+      const r = this.chBox.getBoundingClientRect();
+      this.channelMenu(r.left, r.bottom + 2);
+    });
     this.hThumb = el('div', { class: 'pr-thumb' });
     this.vThumb = el('div', { class: 'pr-thumb' });
     this.hs = el('div', { class: 'pr-hs', 'data-hint': 'Scroll horizontally (Shift+wheel) · Ctrl+wheel zooms' }, this.hThumb);
     this.vs = el('div', { class: 'pr-vs', 'data-hint': 'Scroll vertically (wheel) · Ctrl+Alt+wheel zooms' }, this.vThumb);
-    const split = el('div', { class: 'pr-split', 'data-hint': 'Drag to resize the velocity lane' });
-    const tabs = el('div', { class: 'pr-lane-tabs' });
-    for (const m of ['vel', 'pan'] as const) {
-      const b = el('button', { class: 'pr-lane-tab', text: m === 'vel' ? 'Vel' : 'Pan', 'data-hint': m === 'vel' ? 'Show note velocity in the lane' : 'Show note panning in the lane' });
-      b.addEventListener('click', () => {
-        this.laneMode = m;
-        lsSet(LS.laneMode, m);
-        this.syncLaneTabs();
-        this.invalidate('lane');
-      });
-      (b as any)._mode = m;
-      this.laneTabs.push(b);
-      tabs.append(b);
-    }
+    const split = el('div', { class: 'pr-split', 'data-hint': 'Drag to resize the Control lane' });
+    // bottom-left: FL's "Control ▸" lane selector
+    this.laneName = el('span', { class: 'pr-lane-name' });
+    const laneBtn = el('button', { class: 'pr-lane-btn', 'data-hint': 'Control lane — choose what the lane shows and edits (Velocity / Panning)' }, el('span', { text: 'Control' }), el('span', { class: 'pr-lane-arrow', html: IC.arrow }));
+    laneBtn.addEventListener('click', () => {
+      const r = laneBtn.getBoundingClientRect();
+      showMenu(this.laneItems(), r.left, r.bottom + 2);
+    });
+    const laneSide = el('div', { class: 'pr-lane-side' }, laneBtn, this.laneName);
     this.body = el(
       'div',
       { class: 'pr-body' },
-      this.corner,
+      this.chBox,
+      ovwBox,
+      el('div', { class: 'pr-fill a-o3' }),
       rulerWrap,
-      el('div', { class: 'pr-fill' }),
+      el('div', { class: 'pr-fill a-r3' }),
       keysWrap,
       gridWrap,
       this.vs,
       split,
-      tabs,
+      laneSide,
       laneWrap,
-      el('div', { class: 'pr-fill' }),
-      el('div', { class: 'pr-fill' }),
+      el('div', { class: 'pr-fill a-l3' }),
+      el('div', { class: 'pr-fill a-c4' }),
       this.hs,
-      el('div', { class: 'pr-fill' }),
+      el('div', { class: 'pr-fill a-c5' }),
     );
     this.status = el('div', { class: 'pr-status' });
     this.bar = this.buildBar();
-    this.root = el('div', { class: 'pr' }, this.bar.root, this.body);
+    this.root = el('div', { class: 'pr' }, this.body);
     Object.defineProperty(this.root, '__pr', { value: this }); // debug / test handle
     this.applyLaneLayout();
     this.syncLaneTabs();
@@ -261,6 +280,7 @@ class PianoRoll {
     this.wireRuler(rulerWrap);
     this.wireLane(laneWrap);
     this.wireScrollbars();
+    this.wireOverview(ovwWrap);
     this.wireSplit(split);
     this.root.addEventListener('pointermove', (e) => (this.lastClient = { x: e.clientX, y: e.clientY }), true);
 
@@ -543,6 +563,7 @@ class PianoRoll {
     if (this.keys.fit()) this.dirty.keys = true;
     if (this.ruler.fit()) this.dirty.ruler = true;
     if (this.showLane && this.lane.fit()) this.dirty.lane = true;
+    if (this.ovw.fit()) this.dirty.ruler = true;
     if (!this.grid.w || !this.grid.h) return;
     if (this.needFit) {
       this.needFit = false;
@@ -571,7 +592,7 @@ class PianoRoll {
         for (const [cid, arr] of Object.entries(pat.notes)) {
           if (cid === c?.id || !arr.length) continue;
           const gc = store.channel(cid);
-          if (gc) ghosts.push({ notes: arr, color: '#c3ced4' });
+          if (gc) ghosts.push({ notes: arr, color: gc.color }); // FL: dim outlines in the other channels' colours
         }
       }
       const snap = store.ui.snap;
@@ -599,12 +620,13 @@ class PianoRoll {
     }
     if (this.dirty.keys) drawKeys(this.keys.ctx, v, this.keys.w, { lit: this.lit, hoverKey: this.hoverKey, mask, root: sc.root });
     if (this.dirty.ruler) drawRuler(this.ruler.ctx, v, this.ruler.h, { patLen, bar, timeSig: store.project.timeSig, timeSel: this.timeSel, hoverTick: this.rulerHover });
+    if ((this.dirty.ruler || this.dirty.grid) && this.ovw.w) drawOverview(this.ovw.ctx, v, this.ovw.w, this.ovw.h, { notes, total: this.contentEnd(), patLen, sel: this.sel, play: null });
     if (this.dirty.lane && this.showLane && this.lane.w) drawLane(this.lane.ctx, v, this.lane.h, { notes, color, sel: this.sel, mode: this.laneMode, patLen, bar, hoverNote: this.laneHover ?? this.hoverNote });
     this.dirty = { grid: false, keys: false, ruler: false, lane: false };
     this.updateScrollbars();
     this.placePlayhead();
     this.updateStatus(notes.length);
-    this.corner.textContent = this.hoverKey !== null ? noteName(this.hoverKey) : '';
+    this.chKey.textContent = this.hoverKey !== null ? noteName(this.hoverKey) : '';
   }
 
   private updateStatus(count: number) {
@@ -850,7 +872,7 @@ class PianoRoll {
       this.hoverEdge = he;
       this.invalidate('grid', 'lane');
       if (keyChanged) this.invalidate('keys');
-      this.corner.textContent = noteName(key);
+      this.chKey.textContent = noteName(key);
     }
     this.updateCursor(h);
     const t = xTick(this.v, p.x);
@@ -1348,7 +1370,7 @@ class PianoRoll {
       const k = clamp(yKey(this.v, this.local(e, wrap).y), 0, 127);
       if (k !== this.hoverKey) {
         this.hoverKey = k;
-        this.corner.textContent = noteName(k);
+        this.chKey.textContent = noteName(k);
         this.invalidate('grid', 'keys');
       }
     });
@@ -1438,7 +1460,6 @@ class PianoRoll {
   // ================================================================ velocity / pan lane
   private wireLane(wrap: HTMLElement) {
     const cv = this.lane.canvas;
-    wrap.dataset.hint = 'Velocity lane — drag to paint velocities (only selected notes when there is a selection) · right-drag resets';
     cv.addEventListener('contextmenu', (e) => e.preventDefault());
     const valAt = (y: number) => {
       const top = 6, bot = this.lane.h - 4, span = Math.max(1, bot - top);
@@ -1517,7 +1538,78 @@ class PianoRoll {
   }
 
   private syncLaneTabs() {
-    for (const b of this.laneTabs) b.classList.toggle('on', (b as any)._mode === this.laneMode);
+    this.laneName.textContent = this.laneMode === 'vel' ? 'Note velocity' : 'Note panning';
+    this.lane.wrap.dataset.hint =
+      this.laneMode === 'vel'
+        ? 'Control lane: note velocity — drag to paint (only selected notes when there is a selection) · right-drag resets'
+        : 'Control lane: note panning — drag to paint (only selected notes when there is a selection) · right-drag centres';
+  }
+
+  setLaneMode(m: 'vel' | 'pan') {
+    this.laneMode = m;
+    lsSet(LS.laneMode, m);
+    this.syncLaneTabs();
+    if (!this.showLane) this.toggleLane();
+    this.invalidate('lane');
+  }
+
+  private laneItems(): MenuItem[] {
+    return [
+      { label: 'Note velocity', checked: this.laneMode === 'vel', action: () => this.setLaneMode('vel') },
+      { label: 'Note panning', checked: this.laneMode === 'pan', action: () => this.setLaneMode('pan') },
+      { sep: true },
+      { label: 'Show Control lane', checked: this.showLane, action: () => this.toggleLane() },
+    ];
+  }
+
+  channelMenu(x: number, y: number) {
+    const cur = this.ch()?.id;
+    const pat = this.pat();
+    const items: MenuItem[] = store.project.channels.map((c) => ({
+      label: c.name + ((pat?.notes[c.id]?.length ?? 0) ? `  (${pat.notes[c.id].length})` : ''),
+      color: c.color,
+      checked: c.id === cur,
+      action: () => store.setUI({ pianoRollChannel: c.id, selectedChannels: [c.id] }),
+    }));
+    if (!items.length) items.push({ label: 'No channels — add one in the Channel rack', disabled: true });
+    showMenu(items, x, y);
+  }
+
+  // ================================================================ overview strip
+  private wireOverview(wrap: HTMLElement) {
+    const cv = this.ovw.canvas;
+    const geo = () => overviewSpan(this.v, this.ovw.w, this.contentEnd());
+    cv.addEventListener('pointerdown', (e) => {
+      if (e.button !== 0 || this.dragging) return;
+      e.preventDefault();
+      this.releaseFocus();
+      const x = this.local(e, wrap).x;
+      const g0 = geo();
+      if (x < g0.x0 || x > g0.x1) {
+        // jump: centre the view there, then keep dragging the box
+        this.sx = x / g0.k - this.grid.w / 2 / this.zx;
+        this.clampScroll();
+        this.invalidate();
+      }
+      const sx0 = this.sx, cx0 = e.clientX;
+      cv.style.cursor = 'grabbing';
+      this.drag(e, wrap, (ev) => {
+        this.sx = sx0 + (ev.clientX - cx0) / g0.k;
+        this.invalidate();
+      }, () => (cv.style.cursor = ''));
+    });
+    cv.addEventListener('pointermove', (e) => {
+      if (this.dragging) return;
+      const x = this.local(e, wrap).x;
+      const g0 = geo();
+      cv.style.cursor = x >= g0.x0 && x <= g0.x1 ? 'grab' : 'pointer';
+    });
+    cv.addEventListener('wheel', (e) => {
+      e.preventDefault();
+      const dy = e.deltaMode === 1 ? e.deltaY * 16 : e.deltaY;
+      if (e.shiftKey) this.scrollBy(dy / this.zx, 0);
+      else this.zoomH(Math.exp(-clamp(dy, -150, 150) * 0.0025));
+    }, { passive: false });
   }
 
   private applyLaneLayout() {
@@ -1595,28 +1687,10 @@ class PianoRoll {
 
   // ================================================================ toolbar
   private buildBar(): BarApi {
-    const menuBtn = el('button', { class: 'icon-btn pr-menu-btn', html: ICONS.menu, 'data-hint': 'Piano roll menu — edit, tools, selection, zoom, view' });
+    const menuBtn = el('button', { class: 'pr-hbtn pr-menu-btn', html: IC.arrow, 'data-hint': 'Piano roll menu — edit, tools, selection, zoom, view' });
     menuBtn.addEventListener('click', () => {
       const r = menuBtn.getBoundingClientRect();
       showMenu(this.menuItems(), r.left, r.bottom + 2);
-    });
-
-    // channel selector
-    const chSwatch = el('span', { class: 'pr-ch-sw' });
-    const chName = el('span', { class: 'pr-ch-name' });
-    const chBtn = el('button', { class: 'pr-ch', 'data-hint': 'Channel being edited — click to pick another channel' }, chSwatch, chName, el('span', { class: 'pr-caret', html: ICONS.chevronDown }));
-    chBtn.addEventListener('click', () => {
-      const r = chBtn.getBoundingClientRect();
-      const cur = this.ch()?.id;
-      const pat = this.pat();
-      const items: MenuItem[] = store.project.channels.map((c) => ({
-        label: c.name + ((pat?.notes[c.id]?.length ?? 0) ? `  (${pat.notes[c.id].length})` : ''),
-        color: c.color,
-        checked: c.id === cur,
-        action: () => store.setUI({ pianoRollChannel: c.id, selectedChannels: [c.id] }),
-      }));
-      if (!items.length) items.push({ label: 'No channels — add one in the Channel rack', disabled: true });
-      showMenu(items, r.left, r.bottom + 2);
     });
 
     // tools
@@ -1629,63 +1703,67 @@ class PianoRoll {
     const tools = el('div', { class: 'pr-tools' }, ...toolBtns);
 
     // snap
-    const snapSel = el('select', { class: 'select pr-snap', 'data-hint': 'Snap for the piano roll (shared with the global snap) — Alt while dragging bypasses it · Backspace toggles Line / None' }) as HTMLSelectElement;
+    const snapSel = el('select', { class: 'pr-snap', 'data-hint': 'Snap for the piano roll (shared with the global snap) — Alt while dragging bypasses it · Backspace toggles Line / None' }) as HTMLSelectElement;
     for (const s of SNAP_ORDER) snapSel.append(el('option', { value: s, text: SNAP_LABELS[s] }));
     snapSel.addEventListener('change', () => {
       store.setUI({ snap: snapSel.value as Snap });
       snapSel.blur();
     });
+    const snapBox = el('div', { class: 'pr-box', 'data-hint': 'Snap' }, el('span', { class: 'pr-box-i', html: ICONS.magnet }), snapSel);
 
-    // scale
-    const rootSel = el('select', { class: 'select pr-root', 'data-hint': 'Scale root' }) as HTMLSelectElement;
-    ROOT_NAMES.forEach((n, i) => rootSel.append(el('option', { value: String(i), text: n })));
-    rootSel.addEventListener('change', () => {
-      store.setUI({ scale: { ...store.ui.scale, root: parseInt(rootSel.value) } });
-      rootSel.blur();
+    // chord stamp (FL's stamp button: pick a chord, drawing a note stamps it)
+    const chordLbl = el('span', { class: 'pr-tbtn-t' });
+    const chordBtn = el('button', { class: 'pr-tbtn pr-chord', 'data-hint': 'Chord stamp — drawing a note adds the rest of the chord (click to choose)' }, el('span', { class: 'pr-tbtn-i', html: IC.stamp }), chordLbl);
+    chordBtn.addEventListener('click', () => {
+      const r = chordBtn.getBoundingClientRect();
+      showMenu(this.chordItems(), r.left, r.bottom + 2);
     });
-    const typeSel = el('select', { class: 'select pr-stype', 'data-hint': 'Scale type (14 scales) — used by highlighting, snap-to-scale and the in-scale chord stamps' }) as HTMLSelectElement;
-    for (const s of SCALES) typeSel.append(el('option', { value: s.id, text: s.name }));
-    typeSel.addEventListener('change', () => {
-      store.setUI({ scale: { ...store.ui.scale, type: typeSel.value } });
-      typeSel.blur();
+
+    // scale (root + type menu) with highlight / snap-to-scale toggles
+    const scaleLbl = el('span', { class: 'pr-tbtn-t' });
+    const scaleBtn = el('button', { class: 'pr-tbtn pr-scale', 'data-hint': 'Scale — root and type (14 scales) used by highlighting, snap-to-scale and the in-scale chord stamps' }, el('span', { class: 'pr-tbtn-i', html: ICONS.scale }), scaleLbl);
+    scaleBtn.addEventListener('click', () => {
+      const r = scaleBtn.getBoundingClientRect();
+      const sc = store.ui.scale;
+      showMenu(
+        [
+          { label: 'Root', submenu: ROOT_NAMES.map((n, i) => ({ label: n, checked: sc.root === i, action: () => store.setUI({ scale: { ...store.ui.scale, root: i } }) })) },
+          { label: 'Scale', submenu: SCALES.map((x) => ({ label: x.name, checked: sc.type === x.id, action: () => store.setUI({ scale: { ...store.ui.scale, type: x.id } }) })) },
+          { sep: true },
+          { cmd: 'pr.scaleHighlight' },
+          { cmd: 'pr.scaleSnap' },
+        ],
+        r.left,
+        r.bottom + 2,
+      );
     });
-    const hiBtn = el('button', { class: 'icon-btn pr-tg', html: ICONS.scale, 'data-hint': 'Highlight the scale — rows outside the scale are dimmed, root rows tinted' });
+    const hiBtn = el('button', { class: 'pr-hbtn pr-opt', html: ICONS.scale, 'data-hint': 'Highlight the scale — rows outside the scale are dimmed, root rows tinted' });
     hiBtn.addEventListener('click', () => store.setUI({ scale: { ...store.ui.scale, highlight: !store.ui.scale.highlight } }));
-    const lockBtn = el('button', { class: 'icon-btn pr-tg', html: IC.lock, 'data-hint': 'Snap to scale — drawn, moved and transposed notes are forced onto the scale' });
+    const lockBtn = el('button', { class: 'pr-hbtn pr-opt', html: IC.lock, 'data-hint': 'Snap to scale — drawn, moved and transposed notes are forced onto the scale' });
     lockBtn.addEventListener('click', () => store.setUI({ scale: { ...store.ui.scale, snap: !store.ui.scale.snap } }));
-    const scale = el('div', { class: 'pr-chip', 'data-hint': 'Scale' }, el('span', { class: 'pr-chip-i', html: ICONS.scale }), rootSel, typeSel, hiBtn, lockBtn);
 
-    // chord stamp
-    const chordSel = el('select', { class: 'select pr-chord', 'data-hint': 'Chord stamp — drawing a note adds the rest of the chord' }) as HTMLSelectElement;
-    for (const c of CHORDS) chordSel.append(el('option', { value: c.id, text: c.id === 'off' ? 'No chord' : c.name }));
-    chordSel.addEventListener('change', () => {
-      this.chord = chordSel.value;
-      chordSel.classList.toggle('on', this.chord !== 'off');
-      chordSel.blur();
-    });
-    const chord = el('div', { class: 'pr-chip' }, el('span', { class: 'pr-chip-i', html: ICONS.chord }), chordSel);
-
-    const ghostBtn = el('button', { class: 'icon-btn', html: ICONS.ghost, 'data-hint': 'Ghost notes — show the other channels of this pattern faintly (Alt+V)' });
+    const ghostBtn = el('button', { class: 'pr-hbtn', html: ICONS.ghost, 'data-hint': 'Ghost notes — show the other channels of this pattern as dim outlines (Alt+V)' });
     ghostBtn.addEventListener('click', () => store.setUI({ ghost: !store.ui.ghost }));
-    const laneBtn = el('button', { class: 'icon-btn', html: IC.lane, 'data-hint': 'Show / hide the velocity lane' });
+    const laneBtn = el('button', { class: 'pr-hbtn pr-opt2', html: IC.lane, 'data-hint': 'Show / hide the Control lane (velocity / panning)' });
     laneBtn.addEventListener('click', () => this.toggleLane());
-    const zOut = el('button', { class: 'icon-btn', html: IC.zoomOut, 'data-hint': 'Zoom out (Page Down) · Ctrl+wheel zooms around the mouse' });
+    const zOut = el('button', { class: 'pr-hbtn pr-opt2', html: IC.zoomOut, 'data-hint': 'Zoom out (Page Down) · Ctrl+wheel zooms around the mouse' });
     zOut.addEventListener('click', () => this.zoomH(1 / 1.3));
-    const zIn = el('button', { class: 'icon-btn', html: IC.zoomIn, 'data-hint': 'Zoom in (Page Up) · Shift+1…4 quick zoom levels' });
+    const zIn = el('button', { class: 'pr-hbtn pr-opt2', html: IC.zoomIn, 'data-hint': 'Zoom in (Page Up) · Shift+1…4 quick zoom levels' });
     zIn.addEventListener('click', () => this.zoomH(1.3));
 
+    // FL keeps this toolbar in the window title bar
     const root = el(
       'div',
-      { class: 'wbar pr-bar' },
+      { class: 'pr-hx' },
       menuBtn,
-      chBtn,
-      el('div', { class: 'sep' }),
+      snapBox,
+      chordBtn,
+      scaleBtn,
+      hiBtn,
+      lockBtn,
+      el('div', { class: 'pr-hsep' }),
       tools,
-      el('div', { class: 'sep' }),
-      el('div', { class: 'pr-chip', 'data-hint': 'Snap' }, el('span', { class: 'pr-chip-i', html: ICONS.magnet }), snapSel),
-      scale,
-      chord,
-      el('div', { class: 'sep' }),
+      el('div', { class: 'pr-hsep' }),
       ghostBtn,
       laneBtn,
       zOut,
@@ -1698,23 +1776,29 @@ class PianoRoll {
       if (!ui) return;
       for (const b of toolBtns) b.classList.toggle('on', (b as any)._tool === ui.prTool);
       if (document.activeElement !== snapSel) snapSel.value = ui.snap;
-      if (document.activeElement !== rootSel) rootSel.value = String(ui.scale.root);
-      if (document.activeElement !== typeSel) typeSel.value = ui.scale.type;
+      const st = SCALES.find((x) => x.id === ui.scale.type);
+      scaleLbl.textContent = `${ROOT_NAMES[ui.scale.root] ?? 'C'} ${st?.name ?? ''}`;
+      scaleBtn.classList.toggle('on', ui.scale.highlight || ui.scale.snap);
       hiBtn.classList.toggle('on', ui.scale.highlight);
       lockBtn.classList.toggle('on', ui.scale.snap);
       ghostBtn.classList.toggle('on', ui.ghost);
       laneBtn.classList.toggle('on', this.showLane);
-      chordSel.value = this.chord;
-      chordSel.classList.toggle('on', this.chord !== 'off');
+      const ch = CHORDS.find((c) => c.id === this.chord);
+      chordLbl.textContent = this.chord === 'off' || !ch ? 'Chord' : ch.name;
+      chordBtn.classList.toggle('on', this.chord !== 'off');
     };
     const syncChannel = () => {
       if (!store.project) return;
       const c = this.ch();
       const name = c?.name ?? '(no channel)';
-      if (chName.textContent !== name) chName.textContent = name;
-      chSwatch.style.background = c?.color ?? '#7a8287';
+      if (this.chName.textContent !== name) this.chName.textContent = name;
+      this.chBox.style.setProperty('--cc', c?.color ?? '#7a8287');
     };
     return { root, sync, syncChannel, setChord: (id: string) => { this.chord = id; sync(); } };
+  }
+
+  private chordItems(): MenuItem[] {
+    return CHORDS.map((ch) => ({ label: ch.id === 'off' ? 'No chord' : ch.name, checked: this.chord === ch.id, action: () => this.bar.setChord(ch.id) }));
   }
 
   menuItems(): MenuItem[] {
@@ -1742,7 +1826,7 @@ class PianoRoll {
       },
       {
         label: 'Chord stamp',
-        submenu: CHORDS.map((ch) => ({ label: ch.id === 'off' ? 'No chord' : ch.name, checked: this.chord === ch.id, action: () => this.bar.setChord(ch.id) })),
+        submenu: this.chordItems(),
       },
       { sep: true },
       c('pr.importMidi'),
@@ -2067,7 +2151,7 @@ function registerCommands() {
     cmd('pr.zoom4', 'Zoom to fit', ['Shift+4'], () => P().quickZoom(4)),
     cmd('pr.center', 'Center on playhead', ['Shift+0'], () => P().centerOnPlayhead()),
     cmd('pr.ghost', 'Ghost notes', ['Alt+V'], () => store.setUI({ ghost: !store.ui.ghost }), { checked: () => store.ui.ghost }),
-    cmd('pr.lane', 'Velocity lane', [], () => P().toggleLane(), { checked: () => !!inst?.showLane }),
+    cmd('pr.lane', 'Control lane (velocity / panning)', [], () => P().toggleLane(), { checked: () => !!inst?.showLane }),
     cmd('pr.names', 'Note names on notes', [], () => {
       const p = P();
       p.showNames = !p.showNames;
@@ -2092,6 +2176,7 @@ export function createPianoRoll(): PanelDef {
   registerCommands();
   return {
     body: pr.root,
+    headerExtra: pr.bar.root,
     onShow: () => pr.onShow(),
     onHide: () => pr.onHide(),
     onResize: () => pr.invalidate(),

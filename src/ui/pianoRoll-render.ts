@@ -48,13 +48,13 @@ function luminance(hex: string) {
 }
 
 const C = {
-  // FL-style teal-grey grid
-  rowW: '#3a4a51',
-  rowB: '#334249',
-  rowWOut: '#2f3c42',
-  rowBOut: '#2a363c',
-  rowSep: 'rgba(16,22,25,0.30)',
-  octSep: '#1a2327',
+  // FL 21-style dark teal-slate grid
+  rowW: '#36464e',
+  rowB: '#2f3e46',
+  rowWOut: '#2e3b42',
+  rowBOut: '#29353b',
+  rowSep: 'rgba(14,20,24,0.32)',
+  octSep: '#172126',
   rootTint: 'rgba(255,157,42,0.06)',
   hoverRow: 'rgba(255,255,255,0.05)',
   barShade: 'rgba(0,0,0,0.06)',
@@ -171,10 +171,11 @@ export function drawGrid(ctx: CanvasRenderingContext2D, v: View, d: GridData) {
       any = true;
     }
     if (!any) continue;
-    ctx.fillStyle = rgba(gch.color, 0.16);
+    // FL ghost notes: dim outlines in the other channel's colour
+    ctx.fillStyle = rgba(gch.color, outline ? 0.09 : 0.22);
     ctx.fill();
     if (outline) {
-      ctx.strokeStyle = rgba(gch.color, 0.36);
+      ctx.strokeStyle = rgba(gch.color, 0.55);
       ctx.lineWidth = 1;
       ctx.stroke();
     }
@@ -412,8 +413,8 @@ export interface RulerData {
 export function drawRuler(ctx: CanvasRenderingContext2D, v: View, h: number, d: RulerData) {
   const w = v.gw;
   const g = ctx.createLinearGradient(0, 0, 0, h);
-  g.addColorStop(0, '#454e54');
-  g.addColorStop(1, '#394146');
+  g.addColorStop(0, '#36444b');
+  g.addColorStop(1, '#2e3a40');
   ctx.fillStyle = g;
   ctx.fillRect(0, 0, w, h);
   const t0 = v.sx, t1 = xTick(v, w);
@@ -421,7 +422,7 @@ export function drawRuler(ctx: CanvasRenderingContext2D, v: View, h: number, d: 
   // after-end shading
   const xe = tickX(v, d.patLen);
   if (xe < w) {
-    ctx.fillStyle = 'rgba(0,0,0,0.25)';
+    ctx.fillStyle = 'rgba(0,0,0,0.22)';
     ctx.fillRect(Math.max(0, xe), 0, w - Math.max(0, xe), h);
   }
   if (d.timeSel) {
@@ -435,24 +436,24 @@ export function drawRuler(ctx: CanvasRenderingContext2D, v: View, h: number, d: 
   for (let t = Math.floor(t0 / minor) * minor; t <= t1; t += minor) {
     const x = Math.round(tickX(v, t));
     const isBar = t % bar === 0, isBeat = t % 96 === 0;
-    ctx.fillStyle = isBar ? '#77838e' : isBeat ? '#535e68' : '#3f4850';
-    const th = isBar ? h * 0.45 : isBeat ? h * 0.28 : h * 0.16;
+    ctx.fillStyle = isBar ? 'rgba(255,255,255,0.32)' : isBeat ? 'rgba(255,255,255,0.16)' : 'rgba(255,255,255,0.08)';
+    const th = isBar ? h - 3 : isBeat ? h * 0.32 : h * 0.18;
     ctx.fillRect(x, h - th, 1, th);
   }
   // labels: every N bars so they never collide; beats when zoomed in
   const barPx = bar * v.zx;
   let every = 1;
-  while (every * barPx < 30) every *= 2;
+  while (every * barPx < 28) every *= 2;
   ctx.textBaseline = 'top';
-  ctx.font = `600 11px ${FONT}`;
+  ctx.font = `600 10.5px ${FONT}`;
   for (let b = Math.floor(t0 / bar / every) * every; b * bar <= t1; b += every) {
     const x = Math.round(tickX(v, b * bar));
-    ctx.fillStyle = '#d7dee4';
-    ctx.fillText(String(b + 1), x + 4, 3);
+    ctx.fillStyle = b * bar < d.patLen ? '#e1e8ec' : '#8d9aa2';
+    ctx.fillText(String(b + 1), x + 3, 3);
   }
   if (96 * v.zx >= 46) {
     ctx.font = `10px ${FONT}`;
-    ctx.fillStyle = '#7f8b96';
+    ctx.fillStyle = '#7f8c95';
     for (let t = Math.ceil(t0 / 96) * 96; t <= t1; t += 96) {
       if (t % bar === 0) continue;
       const x = Math.round(tickX(v, t));
@@ -475,8 +476,66 @@ export function drawRuler(ctx: CanvasRenderingContext2D, v: View, h: number, d: 
     ctx.fillStyle = 'rgba(255,255,255,0.35)';
     ctx.fillRect(x, 0, 1, h);
   }
-  ctx.fillStyle = '#101316';
+  ctx.fillStyle = '#121719';
   ctx.fillRect(0, h - 1, w, 1);
+}
+
+// ------------------------------------------------------------------ overview strip
+export interface OverviewData {
+  notes: Note[];
+  total: number; // ticks across the strip
+  patLen: number;
+  sel: Set<string>;
+  play: number | null;
+}
+
+/** Visible window of the overview (strip px) and px-per-tick. */
+export function overviewSpan(v: View, w: number, total: number) {
+  const k = w / Math.max(1, total);
+  return { k, x0: v.sx * k, x1: (v.sx + v.gw / v.zx) * k };
+}
+
+export function drawOverview(ctx: CanvasRenderingContext2D, v: View, w: number, h: number, d: OverviewData) {
+  ctx.fillStyle = '#232d33';
+  ctx.fillRect(0, 0, w, h);
+  const { k, x0, x1 } = overviewSpan(v, w, d.total);
+  const xe = d.patLen * k;
+  if (xe < w) {
+    ctx.fillStyle = 'rgba(0,0,0,0.25)';
+    ctx.fillRect(xe, 0, w - xe, h);
+  }
+  if (d.notes.length) {
+    let lo = 127, hi = 0;
+    for (const n of d.notes) {
+      lo = Math.min(lo, n.key);
+      hi = Math.max(hi, n.key);
+    }
+    const span = Math.max(12, hi - lo + 3);
+    const mid = (lo + hi) / 2;
+    const top = mid + span / 2;
+    const rh = (h - 4) / span;
+    const nh = Math.max(1, Math.min(2.5, rh));
+    for (const pass of [false, true]) {
+      ctx.fillStyle = pass ? '#ff8a7f' : '#a6e494';
+      ctx.beginPath();
+      for (const n of d.notes) {
+        if (d.sel.has(n.id) !== pass || n.muted) continue;
+        ctx.rect(n.start * k, 2 + (top - n.key) * rh, Math.max(1, n.len * k - 0.5), nh);
+      }
+      ctx.fill();
+    }
+  }
+  // visible window box
+  const a = Math.max(0, Math.min(w - 3, x0)), b = Math.max(a + 3, Math.min(w, x1));
+  ctx.fillStyle = 'rgba(255,255,255,0.09)';
+  ctx.fillRect(a, 0, b - a, h);
+  ctx.strokeStyle = 'rgba(236,242,245,0.75)';
+  ctx.lineWidth = 1;
+  ctx.strokeRect(Math.round(a) + 0.5, 0.5, Math.max(2, Math.round(b - a) - 1), h - 1);
+  if (d.play !== null) {
+    ctx.fillStyle = '#8fe36d';
+    ctx.fillRect(Math.round(d.play * k), 0, 1, h);
+  }
 }
 
 // ------------------------------------------------------------------ velocity / pan lane
@@ -492,22 +551,22 @@ export interface LaneData {
 
 export function drawLane(ctx: CanvasRenderingContext2D, v: View, h: number, d: LaneData) {
   const w = v.gw;
-  ctx.fillStyle = '#2c383e';
+  ctx.fillStyle = '#26323a';
   ctx.fillRect(0, 0, w, h);
   const top = 6, bot = h - 4, span = Math.max(1, bot - top);
   // guides
-  ctx.fillStyle = 'rgba(255,255,255,0.045)';
+  ctx.fillStyle = 'rgba(255,255,255,0.035)';
   for (const f of [0.25, 0.5, 0.75]) ctx.fillRect(0, Math.round(top + span * f), w, 1);
   if (d.mode === 'pan') {
-    ctx.fillStyle = 'rgba(255,255,255,0.12)';
+    ctx.fillStyle = 'rgba(255,255,255,0.13)';
     ctx.fillRect(0, Math.round(top + span / 2), w, 1);
   }
   const t0 = v.sx, t1 = xTick(v, w);
-  // bar lines
+  // bar / beat lines like the grid
   const minor = lineSpacing(v.zx, d.bar, 7);
   for (let t = Math.floor(t0 / minor) * minor; t <= t1; t += minor) {
     if (t % 96 !== 0) continue;
-    ctx.fillStyle = t % d.bar === 0 ? 'rgba(0,0,0,0.55)' : 'rgba(255,255,255,0.04)';
+    ctx.fillStyle = t % d.bar === 0 ? 'rgba(0,0,0,0.5)' : 'rgba(0,0,0,0.2)';
     ctx.fillRect(Math.round(tickX(v, t)), 0, 1, h);
   }
   const xe = tickX(v, d.patLen);
@@ -516,23 +575,23 @@ export function drawLane(ctx: CanvasRenderingContext2D, v: View, h: number, d: L
     ctx.fillRect(Math.max(0, xe), 0, w - Math.max(0, xe), h);
   }
   const anySel = d.sel.size > 0;
-  // level of detail: when stems are denser than ~5px, draw bare stems (no dots / tails), one per pixel column
+  // level of detail: when stems are denser than ~5px, draw bare stems (no heads), one per pixel column
   let visible = 0;
   for (const n of d.notes) if (n.start <= t1 && n.start >= t0 - 4 / v.zx) visible++;
   const dense = visible > w / 5;
-  // bucket stems by colour so each bucket is one stroke + one fill
-  const buckets = new Map<string, { col: string; sel: boolean; dim: boolean; muted: boolean; pts: number[]; seen: Map<number, number> }>();
+  // bucket stems by colour so each bucket is one stroke (+ one head path)
+  const buckets = new Map<string, { col: string; sel: boolean; dim: boolean; pts: number[]; seen: Map<number, number> }>();
   for (const n of d.notes) {
     if (n.start > t1 || n.start < t0 - 4 / v.zx) continue;
     const isSel = d.sel.has(n.id);
     const x = Math.round(tickX(v, n.start)) + 0.5;
     const val = d.mode === 'vel' ? clamp(n.vel, 0, 1) : clamp(n.pan, -1, 1);
     const y = d.mode === 'vel' ? bot - val * span : top + span / 2 - (val * span) / 2;
-    const col = n.muted ? '#5c646c' : isSel ? '#ffffff' : noteFill(d.color, d.mode === 'vel' ? n.vel : 0.7, n.id === d.hoverNote ? 0.15 : 0);
+    const col = n.muted ? '#66717a' : isSel ? '#ff7a6e' : noteFill(d.color, d.mode === 'vel' ? Math.max(0.55, n.vel) : 0.8, n.id === d.hoverNote ? 0.2 : 0.08);
     const dim = anySel && !isSel;
     const k = col + (dim ? 'd' : '') + (isSel ? 's' : '');
     let b = buckets.get(k);
-    if (!b) buckets.set(k, (b = { col, sel: isSel, dim, muted: !!n.muted, pts: [], seen: new Map() }));
+    if (!b) buckets.set(k, (b = { col, sel: isSel, dim, pts: [], seen: new Map() }));
     if (dense) {
       const prev = b.seen.get(x);
       if (prev !== undefined) {
@@ -541,46 +600,34 @@ export function drawLane(ctx: CanvasRenderingContext2D, v: View, h: number, d: L
       }
       b.seen.set(x, b.pts.length);
     }
-    b.pts.push(x, y, n.len * v.zx);
+    b.pts.push(x, y);
   }
-  const base = d.mode === 'vel' ? bot : top + span / 2;
+  const base = d.mode === 'vel' ? bot + 2 : top + span / 2;
+  const rad = 3.2;
   for (const pass of [false, true]) {
     for (const b of buckets.values()) {
       if (b.sel !== pass) continue;
       const P = b.pts;
       ctx.globalAlpha = b.dim ? 0.45 : 1;
-      // length tails
+      // stems (FL: thin vertical lines ending in a round, hollow head)
       ctx.beginPath();
-      let tails = false;
-      for (let i = 0; i < P.length && !dense; i += 3) {
-        if (P[i + 2] > 6) {
-          ctx.rect(P[i], P[i + 1] - 1, P[i + 2] - 2, 2);
-          tails = true;
-        }
-      }
-      if (tails) {
-        ctx.fillStyle = b.muted ? 'rgba(92,100,108,0.25)' : rgba(d.color, b.sel ? 0.3 : 0.16);
-        ctx.fill();
-      }
-      ctx.beginPath();
-      for (let i = 0; i < P.length; i += 3) {
+      for (let i = 0; i < P.length; i += 2) {
+        const up = P[i + 1] < base;
         ctx.moveTo(P[i], base);
-        ctx.lineTo(P[i], P[i + 1]);
+        ctx.lineTo(P[i], dense ? P[i + 1] : P[i + 1] + (up ? rad : -rad));
       }
       ctx.strokeStyle = b.col;
-      ctx.lineWidth = dense ? 1 : 1.5;
+      ctx.lineWidth = 1;
       ctx.stroke();
       if (dense) continue;
       ctx.beginPath();
-      const rad = b.sel ? 3.4 : 3;
-      for (let i = 0; i < P.length; i += 3) {
+      for (let i = 0; i < P.length; i += 2) {
         ctx.moveTo(P[i] + rad, P[i + 1]);
         ctx.arc(P[i], P[i + 1], rad, 0, Math.PI * 2);
       }
-      ctx.fillStyle = b.col;
+      ctx.fillStyle = '#26323a';
       ctx.fill();
-      ctx.strokeStyle = 'rgba(0,0,0,0.6)';
-      ctx.lineWidth = 1;
+      ctx.lineWidth = b.sel ? 1.6 : 1.3;
       ctx.stroke();
     }
   }

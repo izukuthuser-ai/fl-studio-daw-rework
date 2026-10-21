@@ -20,6 +20,30 @@ export interface SourceInfo {
 
 export const DEFAULT_TRACK_H = 56;
 export const TRACK_HEIGHTS = { small: 34, medium: 56, large: 90 } as const;
+/** Colour newTrack() gives a track; such tracks take their header colour from their first clip. */
+export const DEFAULT_TRACK_COLOR = '#5b6872';
+
+/** First clip (earliest start) of every track. */
+export function firstClips(p: Project): Map<number, Clip> {
+  const m = new Map<number, Clip>();
+  for (const c of p.playlist.clips) {
+    const f = m.get(c.track);
+    if (!f || c.start < f.start) m.set(c.track, c);
+  }
+  return m;
+}
+
+/** Header colour of a track: its own colour, or (still default) the colour of its first clip. */
+export function trackDisplayColor(p: Project, i: number, first: Map<number, Clip>): { color: string; derived: boolean; plain: boolean } {
+  const t = p.playlist.tracks[i];
+  if (t && t.color.toLowerCase() !== DEFAULT_TRACK_COLOR) return { color: t.color, derived: false, plain: false };
+  const c = first.get(i);
+  if (c) {
+    const info = sourceInfo(p, c.kind, c.ref);
+    if (info.exists) return { color: info.color, derived: true, plain: false };
+  }
+  return { color: t?.color ?? DEFAULT_TRACK_COLOR, derived: false, plain: true };
+}
 
 export function sourceInfo(p: Project, kind: ClipKind, ref: ID): SourceInfo {
   if (kind === 'pattern') {

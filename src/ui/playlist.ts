@@ -33,6 +33,7 @@ import {
 import {
   COL,
   Lookup,
+  OVERVIEW_H,
   RULER_H,
   View,
   autoPointMap,
@@ -41,8 +42,10 @@ import {
   clearPreviewCaches,
   clipGeom,
   drawMain,
+  drawOverview,
   drawRuler,
   firstCandidate,
+  overviewRange,
   gridUnit,
   titleHeight,
   trackAt,
@@ -65,7 +68,9 @@ const TOOLS: { id: ToolId; label: string; key: string; hint: string }[] = [
 
 const MIN_PPT = 0.004;
 const MAX_PPT = 6;
-const F_MAIN = 1, F_OV = 2, F_RULER = 4, F_HEAD = 8, F_ALL = 15;
+const F_MAIN = 1, F_OV = 2, F_RULER = 4, F_HEAD = 8, F_MAP = 16, F_ALL = 31;
+/** Default vertical zoom: FL-density tracks (56 px tracks × 0.62 ≈ 35 px). */
+const DEFAULT_VZ = 0.62;
 
 const svg = (d: string) => `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">${d}</svg>`;
 const IC = {
@@ -74,6 +79,7 @@ const IC = {
   zoomOut: svg('<circle cx="10.5" cy="10.5" r="6.5"/><path d="M15.5 15.5L21 21M8 10.5h5"/>'),
   picker: svg('<rect x="3.5" y="4.5" width="17" height="15" rx="2"/><path d="M9 4.5v15"/><path d="M5.5 8h1.5M5.5 11h1.5M5.5 14h1.5"/>'),
   caret: svg('<path d="M6 9l6 6 6-6"/>'),
+  arrow: `<svg viewBox="0 0 24 24"><path d="M8 5l9 7-9 7z" fill="currentColor"/></svg>`,
   track: svg('<path d="M4 7h11M4 12h11M4 17h7"/><path d="M18 14v6M15 17h6"/>'),
 };
 
@@ -105,7 +111,7 @@ function loadPrefs(): { ppt?: number; vz?: number; follow?: boolean; picker?: bo
 
 export function createPlaylist(): PanelDef {
   const prefs = loadPrefs();
-  const v: View = { ppt: clamp(prefs.ppt ?? 0.16, MIN_PPT, MAX_PPT), vz: clamp(prefs.vz ?? 1, 0.45, 3), sx: 0, sy: 0, w: 600, h: 300, dpr: 1, tops: [0], rowH: DEFAULT_TRACK_H };
+  const v: View = { ppt: clamp(prefs.ppt ?? 0.16, MIN_PPT, MAX_PPT), vz: clamp(prefs.vz ?? DEFAULT_VZ, 0.45, 3), sx: 0, sy: 0, w: 600, h: 300, dpr: 1, tops: [0], rowH: DEFAULT_TRACK_H };
   let L: Lookup = { pat: new Map(), ch: new Map(), auto: new Map(), byTrack: [], maxLen: [], lastEnd: 0 };
   const sel = new Set<ID>();
   let follow = prefs.follow ?? true;
@@ -142,6 +148,8 @@ export function createPlaylist(): PanelDef {
     { class: 'pl-ruler', 'data-hint': 'Timeline — click: set song position · drag: time selection (loops playback) · drag the marker: move position · double-click: clear selection · wheel: zoom' },
     rulerCv,
   );
+  const mapCv = el('canvas', { class: 'pl-map-cv' }) as HTMLCanvasElement;
+  const mapWrap = el('div', { class: 'pl-map', 'data-hint': 'Song overview — drag the box to scroll, click to jump there · wheel: zoom' }, mapCv);
   const mainCv = el('canvas', { class: 'pl-cv' }) as HTMLCanvasElement;
   const ovCv = el('canvas', { class: 'pl-cv pl-ov' }) as HTMLCanvasElement;
   const spacer = el('div', { class: 'pl-spacer' });
@@ -150,24 +158,26 @@ export function createPlaylist(): PanelDef {
   const headers = createHeaders({
     getView: () => v,
     onWheel: (e) => onWheel(e),
+    refresh: () => invalidate(F_HEAD),
     selectTrack: (i, add) => {
       const ids = store.project.playlist.clips.filter((c) => c.track === i).map((c) => c.id);
       setSel(add ? [...sel, ...ids] : ids);
     },
   });
-  const arr = el('div', { class: 'pl-arr' }, corner, rulerWrap, headers.root, viewEl);
+  const arr = el('div', { class: 'pl-arr' }, corner, mapWrap, rulerWrap, headers.root, viewEl);
   const body = el('div', { class: 'pl-body' }, picker.root, arr);
   const mg = mainCv.getContext('2d', { alpha: false })!;
   const og = ovCv.getContext('2d')!;
   const rg = rulerCv.getContext('2d', { alpha: false })!;
+  const mapG = mapCv.getContext('2d', { alpha: false })!;
 
   // ---- toolbar ----
-  const menuBtn = el('button', { class: 'icon-btn pl-menu-btn', html: ICONS.menu, 'data-hint': 'Playlist menu — editing, view and track commands' });
+  const menuBtn = el('button', { class: 'pl-hbtn pl-menu-btn', html: IC.arrow, 'data-hint': 'Playlist menu — editing, view and track commands' });
   menuBtn.addEventListener('click', () => {
     const r = menuBtn.getBoundingClientRect();
     showMenu(mainMenu(), r.left, r.bottom + 2);
   });
-  const pickerBtn = el('button', { class: 'icon-btn' + (pickerOn ? ' on' : ''), html: IC.picker, 'data-hint': 'Show / hide the clip picker (patterns, audio and automation clips)' });
+  const pickerBtn = el('button', { class: 'pl-hbtn' + (pickerOn ? ' on' : ''), html: IC.picker, 'data-hint': 'Show / hide the clip picker (patterns, audio and automation clips)' });
   pickerBtn.addEventListener('click', () => togglePicker());
   const toolBtns = new Map<ToolId, HTMLElement>();
   const toolGroup = el('div', { class: 'pl-tools' });
@@ -193,32 +203,30 @@ export function createPlaylist(): PanelDef {
     showMenu(sourceMenu(), r.left, r.bottom + 2);
   });
   const selInfo = el('span', { class: 'pl-selinfo' });
-  const followBtn = el('button', { class: 'icon-btn' + (follow ? ' on' : ''), html: IC.follow, 'data-hint': 'Follow playhead — page the view along with song playback' });
+  const followBtn = el('button', { class: 'pl-hbtn' + (follow ? ' on' : ''), html: IC.follow, 'data-hint': 'Follow playhead — page the view along with song playback' });
   followBtn.addEventListener('click', () => toggleFollow());
-  const zoomOutBtn = el('button', { class: 'icon-btn', html: IC.zoomOut, 'data-hint': 'Zoom out (PageDown · Ctrl+wheel)' });
+  const zoomOutBtn = el('button', { class: 'pl-hbtn pl-opt', html: IC.zoomOut, 'data-hint': 'Zoom out (PageDown · Ctrl+wheel)' });
   zoomOutBtn.addEventListener('click', () => zoomAt(v.ppt / 1.4, v.w / 2));
-  const zoomInBtn = el('button', { class: 'icon-btn', html: IC.zoomIn, 'data-hint': 'Zoom in (PageUp · Ctrl+wheel)' });
+  const zoomInBtn = el('button', { class: 'pl-hbtn pl-opt', html: IC.zoomIn, 'data-hint': 'Zoom in (PageUp · Ctrl+wheel)' });
   zoomInBtn.addEventListener('click', () => zoomAt(v.ppt * 1.4, v.w / 2));
   const addTrackBtn = el('button', { class: 'pl-addtrack', 'data-hint': 'Add a playlist track at the bottom' }, el('span', { html: IC.track }), el('span', { text: 'Track' }));
   addTrackBtn.addEventListener('click', () => {
     addPlaylistTrack();
     requestAnimationFrame(() => (scroll.scrollTop = scroll.scrollHeight));
   });
+  // FL keeps the playlist toolbar in the window title bar: ▸ menu · snap · tools · source
   const bar = el(
     'div',
-    { class: 'wbar pl-bar' },
+    { class: 'pl-hx' },
     menuBtn,
-    pickerBtn,
-    el('div', { class: 'sep' }),
+    el('div', { class: 'pl-snapbox' }, el('span', { class: 'pl-magnet', html: ICONS.magnet }), snapSel),
+    el('div', { class: 'pl-hsep' }),
     toolGroup,
-    el('div', { class: 'sep' }),
-    el('span', { class: 'pl-magnet', html: ICONS.magnet }),
-    snapSel,
-    el('div', { class: 'sep' }),
+    el('div', { class: 'pl-hsep' }),
     srcBtn,
-    el('div', { class: 'pl-bar-right' }, selInfo, followBtn, zoomOutBtn, zoomInBtn, el('div', { class: 'sep' }), addTrackBtn),
+    el('div', { class: 'pl-bar-right' }, selInfo, pickerBtn, followBtn, zoomOutBtn, zoomInBtn, el('div', { class: 'pl-hsep' }), addTrackBtn),
   );
-  root.append(bar, body);
+  root.append(body);
 
   // =========================================================================
   // view / geometry
@@ -244,6 +252,7 @@ export function createPlaylist(): PanelDef {
     sizeCanvas(mainCv, w, h);
     sizeCanvas(ovCv, w, h);
     sizeCanvas(rulerCv, w, RULER_H);
+    sizeCanvas(mapCv, w, OVERVIEW_H);
     return true;
   };
   const layoutTracks = () => {
@@ -319,8 +328,35 @@ export function createPlaylist(): PanelDef {
     if (flags & F_OV) drawOverlay();
     if (flags & F_RULER)
       drawRuler(rg, v, store.project, { loop: store.ui.loop, songStart: engine.songStart, songEnd: store.songLength(), playhead: playing ? engine.position : null, hoverTick });
+    if (flags & (F_MAP | F_RULER)) drawOverview(mapG, v, store.project, L, v.w, { total: mapTotal(), songStart: engine.songStart, playhead: playing ? engine.position : null, loop: store.ui.loop });
+    headers.setActive(playing ? playingTracks(engine.position) : null);
     flags = 0;
     if (playing) invalidate(F_OV | F_RULER);
+  }
+
+  /** Tracks with a non-muted clip under the song position (lights their level bars). */
+  function playingTracks(pos: number): Set<number> {
+    const out = new Set<number>();
+    const tracks = store.project.playlist.tracks;
+    for (let i = 0; i < L.byTrack.length; i++) {
+      const list = L.byTrack[i];
+      if (!list?.length || tracks[i]?.mute) continue;
+      for (let k = firstCandidate(list, pos, L.maxLen[i] ?? 0); k < list.length; k++) {
+        const c = list[k];
+        if (c.start > pos) break;
+        if (!c.muted && pos < c.start + c.len) {
+          out.add(i);
+          break;
+        }
+      }
+    }
+    return out;
+  }
+  /** Ticks shown by the overview strip: the song plus some room, at least the visible range. */
+  function mapTotal() {
+    const bar = store.barTicks;
+    const end = Math.max(store.songLength(), L.lastEnd, store.ui.loop?.end ?? 0, bar * 8);
+    return Math.max(Math.ceil((end + bar * 4) / bar) * bar, (v.sx + v.w) / v.ppt);
   }
 
   function drawOverlay() {
@@ -393,7 +429,7 @@ export function createPlaylist(): PanelDef {
   // =========================================================================
   const updateTitle = () => {
     const w = wm?.get('playlist');
-    if (w) w.setTitle(`Playlist — Arrangement › ${store.currentPattern?.name ?? ''}`);
+    if (w) w.setTitle(`Playlist - Arrangement › ${store.currentPattern?.name ?? '(none)'}`);
   };
   const updateTools = () => {
     for (const [id, b] of toolBtns) b.classList.toggle('on', store.ui.plTool === id);
@@ -1371,6 +1407,64 @@ export function createPlaylist(): PanelDef {
   );
 
   // =========================================================================
+  // overview strip
+  // =========================================================================
+  mapCv.addEventListener('pointerdown', (e) => {
+    if (e.button !== 0) return;
+    e.preventDefault();
+    syncScroll();
+    const r = mapCv.getBoundingClientRect();
+    const total = mapTotal();
+    const rg0 = overviewRange(v, total, v.w);
+    const x = e.clientX - r.left;
+    // outside the box: jump so the box is centred there, then keep dragging it
+    if (x < rg0.x0 || x > rg0.x1) {
+      scroll.scrollLeft = Math.max(0, (x / rg0.k) * v.ppt - v.w / 2);
+      syncScroll();
+      invalidate(F_ALL);
+    }
+    const sl0 = scroll.scrollLeft, cx0 = e.clientX;
+    mapCv.classList.add('dragging');
+    drag(
+      e,
+      (_dx, _dy, ev) => {
+        const target = sl0 + ((ev.clientX - cx0) / rg0.k) * v.ppt;
+        if (target + v.w > scroll.scrollWidth) {
+          minSpacerW = target + v.w;
+          updateSpacer();
+        }
+        scroll.scrollLeft = Math.max(0, target);
+        syncScroll();
+        invalidate(F_ALL);
+      },
+      () => {
+        mapCv.classList.remove('dragging');
+        if (minSpacerW) {
+          minSpacerW = 0;
+          updateSpacer();
+        }
+      },
+    );
+  });
+  mapCv.addEventListener('pointermove', (e) => {
+    if (e.buttons) return;
+    const r = mapCv.getBoundingClientRect();
+    const rg0 = overviewRange(v, mapTotal(), v.w);
+    const x = e.clientX - r.left;
+    mapCv.style.cursor = x >= rg0.x0 && x <= rg0.x1 ? 'grab' : 'pointer';
+  });
+  mapWrap.addEventListener(
+    'wheel',
+    (e) => {
+      e.preventDefault();
+      const d = (e.deltaY || e.deltaX) * (e.deltaMode === 1 ? 16 : 1);
+      if (e.shiftKey) scroll.scrollLeft += d;
+      else zoomAt(v.ppt * Math.pow(1.2, -clamp(d, -300, 300) / 100), v.w / 2);
+    },
+    { passive: false },
+  );
+
+  // =========================================================================
   // drag & drop from the picker / browser / OS
   // =========================================================================
   const acceptsDrop = (e: DragEvent) => hasType(e, DT_PLCLIP) || hasType(e, DT_PATTERN) || hasType(e, DT_SAMPLE) || hasType(e, 'Files');
@@ -1700,7 +1794,7 @@ export function createPlaylist(): PanelDef {
           { sep: true },
           { cmd: 'pl.follow' },
           { cmd: 'pl.picker' },
-          { label: 'Reset track heights zoom', action: () => setVZoom(1, 0) },
+          { label: 'Reset track heights zoom', action: () => setVZoom(DEFAULT_VZ, 0) },
         ],
       },
       {
@@ -1790,7 +1884,10 @@ export function createPlaylist(): PanelDef {
     if (keys.includes('songMode')) invalidate(F_OV | F_RULER);
   });
   engine.on('state', () => invalidate(F_OV | F_RULER));
-  samples.on('loaded', () => invalidate(F_MAIN));
+  samples.on('loaded', () => {
+    picker.sync();
+    invalidate(F_MAIN | F_MAP);
+  });
   window.addEventListener('pointermove', (e) => (mouse = { x: e.clientX, y: e.clientY }), { passive: true });
 
   const ro = new ResizeObserver(() => {
@@ -1800,9 +1897,20 @@ export function createPlaylist(): PanelDef {
 
   updateTools();
   if (store.project) refresh();
+  // debug / test handle: client coordinates of a tick / track centre, the selection
+  Object.defineProperty(root, '__pl', {
+    value: {
+      view: v,
+      sel,
+      x: (tick: number) => scroll.getBoundingClientRect().left + tick * v.ppt - scroll.scrollLeft,
+      y: (track: number) => scroll.getBoundingClientRect().top + trackTop(v, track) - scroll.scrollTop + trackHeight(v, track) / 2,
+      titleY: (track: number) => scroll.getBoundingClientRect().top + trackTop(v, track) - scroll.scrollTop + 7,
+    },
+  });
 
   return {
     body: root,
+    headerExtra: bar,
     onShow: () => {
       measure();
       refresh();

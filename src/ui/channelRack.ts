@@ -1,44 +1,55 @@
-// Channel Rack (F6): one DOM row per channel (mute LED, pan, volume, mixer track, name, steps,
-// selection marker). Rows are keyed by channel id and updated in place; the row list is only
-// restructured when the visible channel list changes, and a row's step strip only when its mode
-// (steps / mini piano roll / waveform) or the step count changes.
+// Channel Rack (F6), FL 21 layout: one DOM row per channel — mute LED, pan + volume knobs, mixer
+// track box, the channel button (channel coloured, instrument icon), the select bar and the step
+// strip. Rows are keyed by channel id and updated in place; the row list is only restructured when
+// the visible channel list changes, and a row's step strip only when its mode (steps / mini piano
+// roll / waveform) or the step count changes. Optional graph editor (velocity / pan per step) and
+// piano-roll view, like FL's header toggles.
 import './channelRack.css';
 import { store } from '../core/store';
 import { commands, Command } from '../core/commands';
 import { engine } from '../audio/engine';
 import { samples } from '../audio/samples';
 import { BUILTIN_SOUNDS, BuiltinSound } from '../audio/sounds';
+import { getInstrument } from '../audio/plugins/registry';
 import { Channel, ID, Note, Pattern, STEP } from '../core/types';
 import { CHANNEL_PARAMS, ParamDef } from '../core/params';
 import { SYNTH_PRESETS } from '../core/project';
-import { clamp, el, rgba, shade } from '../core/util';
+import { clamp, el, hexToRgb, rgba } from '../core/util';
 import { KnobEl, MenuItem, drag, knob, lockHint, showMenu, toast } from './widgets';
 import { addChannel, cloneChannels, createAutomation, routeToFreeTracks } from './ops';
 import { hooks, patternMenu } from './actions';
 import { DT_PRESET, DT_SAMPLE, hasType, pickSamples, readDrag, samplesFromDrop } from './dnd';
+import { ICONS } from './icons';
 import { wm } from './wm';
 import type { PanelDef } from './panel';
 import { openPluginWindow } from './pluginWindow';
 import {
   BASE_GROUPS,
+  DT_PLUGIN,
+  InstrumentChoice,
+  addInstrumentChannel,
   addSamplerChannel,
   addSynthChannel,
   applyPreset,
   clearSteps,
   colorChannels,
   confirmDelete,
+  confirmReplace,
   copySteps,
   cutSteps,
   fillSteps,
   groupOf,
   groupOptions,
+  instrumentChoices,
   isStepNote,
   moveChannels,
   orderedSelection,
   pasteSteps,
   promptGroup,
   renameChannel,
+  replaceInstrument,
   replaceSample,
+  resolveInstrument,
   setGroup,
   setMixerTrack,
   soloChannel,
@@ -49,22 +60,35 @@ import {
 } from './channelRack-ops';
 
 // geometry of the step strip (kept in sync with channelRack.css through CSS variables)
-const SW = 18; // step width
+const SW = 16; // step width
 const SG = 2; // gap between steps
-const GG = 7; // gap between groups of 4
-const ROW_H = 26; // step / preview height
+const GG = 6; // gap between groups of 4
+const ROW_H = 24; // step / preview height
+const GRAPH_H = 66; // graph editor height
 
 const stepX = (i: number) => i * (SW + SG) + Math.floor(i / 4) * (GG - SG);
 const stripW = (n: number) => (n ? stepX(n - 1) + SW : 0);
+/** Step index under x (strip-local), tolerant of the gaps. */
+function stepAt(x: number, n: number): number {
+  const group = SW * 4 + SG * 3 + GG;
+  const g = Math.floor(x / group);
+  const within = x - g * group;
+  const k = clamp(Math.floor(within / (SW + SG)), 0, 3);
+  return clamp(g * 4 + k, 0, Math.max(0, n - 1));
+}
 
 const SWING_DEF: ParamDef = { key: 'swing', label: 'Swing', min: 0, max: 1, def: 0, fmt: (v) => Math.round(v * 100) + '%' };
 
-const svg = (d: string) => `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${d}</svg>`;
+const svg = (d: string, sw = 2) => `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="${sw}" stroke-linecap="round" stroke-linejoin="round">${d}</svg>`;
 const IC = {
-  plus: svg('<path d="M12 5v14M5 12h14"/>'),
+  plus: svg('<path d="M12 5v14M5 12h14"/>', 2.4),
   caret: svg('<path d="M6 9l6 6 6-6"/>'),
-  steps: svg('<rect x="3" y="8" width="4" height="8" rx="1"/><rect x="10" y="8" width="4" height="8" rx="1"/><rect x="17" y="8" width="4" height="8" rx="1"/>'),
+  arrow: `<svg viewBox="0 0 24 24"><path d="M8 5l9 7-9 7z" fill="currentColor"/></svg>`,
+  steps: svg('<rect x="3" y="7" width="4" height="10" rx="1"/><rect x="10" y="7" width="4" height="10" rx="1"/><rect x="17" y="7" width="4" height="10" rx="1"/>'),
+  graph: svg('<path d="M4 20V13M9 20V6M14 20v-9M19 20V9"/><path d="M2.5 20.5h19"/>', 2.2),
+  roll: svg('<rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 9h18M3 15h18"/><path d="M7 6.5h5M12 12h6M6 17.5h4" stroke-width="2.6"/>', 1.6),
   filter: svg('<path d="M4 5h16l-6 7v6l-4 2v-8z"/>'),
+  target: svg('<circle cx="12" cy="12" r="7.5"/><circle cx="12" cy="12" r="2.5" fill="currentColor"/>', 1.8),
 };
 
 const keyFor = (id: string) => commands.keysFor(id)[0] ?? '';
@@ -73,6 +97,45 @@ function setText(e: HTMLElement, s: string) {
 }
 function setHint(e: HTMLElement, s: string) {
   if (e.dataset.hint !== s) e.dataset.hint = s;
+}
+function mixRgb(a: string, b: string, t: number, lift = 0): string {
+  const A = hexToRgb(a), B = hexToRgb(b);
+  const f = (i: number) => {
+    let v = A[i] + (B[i] - A[i]) * t;
+    v = lift >= 0 ? v + (255 - v) * lift : v * (1 + lift);
+    return Math.round(clamp(v, 0, 255));
+  };
+  return `rgb(${f(0)},${f(1)},${f(2)})`;
+}
+
+// view prefs (FL header toggles)
+const PREF = 'lf.cr.view';
+function loadView(): { graph: boolean; roll: boolean; graphMode: 'vel' | 'pan' } {
+  try {
+    const v = JSON.parse(localStorage.getItem(PREF) ?? '{}') ?? {};
+    return { graph: !!v.graph, roll: !!v.roll, graphMode: v.graphMode === 'pan' ? 'pan' : 'vel' };
+  } catch {
+    return { graph: false, roll: false, graphMode: 'vel' };
+  }
+}
+const view = loadView();
+function saveView() {
+  try {
+    localStorage.setItem(PREF, JSON.stringify(view));
+  } catch {}
+}
+
+/** Small instrument glyph shown on the right of a channel button. */
+function instrumentIcon(c: Channel): string {
+  if (c.type === 'plugin') return getInstrument(c.plugin?.type)?.icon ?? ICONS.plugin;
+  if (c.audioClip) return ICONS.wave;
+  if (c.type === 'synth') return ICONS.synth;
+  return '';
+}
+function instrumentName(c: Channel): string {
+  if (c.type === 'plugin') return getInstrument(c.plugin?.type)?.name ?? c.plugin?.type ?? 'Plugin';
+  if (c.type === 'synth') return 'Tri-Osc synth';
+  return c.audioClip ? 'Audio clip' : `Sampler · ${c.sampler?.sampleName || 'empty'}`;
 }
 
 // ---------------------------------------------------------------------------
@@ -111,6 +174,21 @@ function openSettings(id: ID) {
   openPluginWindow(id, 'show');
 }
 
+/** The window a channel button opens: its plugin window, or Channel settings for Sampler / Tri-Osc. */
+function windowOpenFor(id: ID): string | null {
+  const c = store.channel(id);
+  if (!c) return null;
+  if (c.type === 'plugin') return wm.get('plugin:' + id)?.visible ? 'plugin:' + id : null;
+  return wm.get('channelsettings')?.visible && store.ui.settingsChannel === id ? 'channelsettings' : null;
+}
+
+/** FL: clicking a channel button opens its window, clicking again closes it. */
+function toggleChannelWindow(id: ID) {
+  const open = windowOpenFor(id);
+  if (open) wm.hide(open);
+  else openPluginWindow(id, 'show');
+}
+
 function openPianoRoll(id: ID) {
   store.setUI({ pianoRollChannel: id, selectedChannels: store.ui.selectedChannels.includes(id) ? store.ui.selectedChannels : [id] });
   wm.show('pianoroll');
@@ -135,6 +213,19 @@ function groupItems(ids: ID[]): MenuItem[] {
   ];
 }
 
+function replaceItems(id: ID): MenuItem[] {
+  const ch = store.channel(id);
+  const cur = ch?.type === 'plugin' ? ch.plugin?.type : ch?.type;
+  return instrumentChoices().map((c: InstrumentChoice) => ({
+    label: c.name,
+    checked: (c.kind === 'plugin' ? c.pluginType : c.kind) === cur,
+    action: () => {
+      const nid = replaceInstrument(id, c);
+      if (nid) toast(`${store.channel(nid)?.name ?? 'Channel'} now uses ${c.name}`, 'ok', 1400);
+    },
+  }));
+}
+
 function channelMenu(id: ID, x: number, y: number) {
   const ch = store.channel(id);
   if (!ch) return;
@@ -144,7 +235,8 @@ function channelMenu(id: ID, x: number, y: number) {
   const vi = vis.findIndex((c) => c.id === id);
   const items: MenuItem[] = [
     { label: 'Piano roll', shortcut: 'F7', action: () => openPianoRoll(id) },
-    { label: 'Channel settings…', shortcut: keyFor('cr.settings'), action: () => openSettings(id) },
+    { label: ch.type === 'plugin' ? 'Plugin window…' : 'Channel settings…', shortcut: keyFor('cr.settings'), action: () => openSettings(id) },
+    { label: 'Replace with', disabled: !!ch.audioClip, submenu: replaceItems(id) },
     { sep: true },
     { label: 'Rename…', shortcut: keyFor('cr.rename'), action: () => renameChannel(id) },
     { label: 'Color…' + many, action: () => colorChannels(ids, x, y) },
@@ -171,7 +263,9 @@ function addMenuItems(): MenuItem[] {
     arr.push(s);
     cats.set(s.category, arr);
   }
+  const plugins = instrumentChoices().filter((c) => c.kind === 'plugin');
   return [
+    ...plugins.map((c) => ({ label: c.name, action: () => addInstrumentChannel(c) })),
     {
       label: 'Tri-Osc Synth',
       submenu: SYNTH_PRESETS.map((p) => ({ label: p.name === 'Init' ? 'Init (empty patch)' : p.name, action: () => addSynthChannel(p.name) })),
@@ -225,8 +319,9 @@ class Row {
   private pan: KnobEl;
   private vol: KnobEl;
   private mix: HTMLElement;
-  private name: HTMLElement;
-  private nameTxt: HTMLElement;
+  private btn: HTMLElement;
+  private btnTxt: HTMLElement;
+  private btnIcon: HTMLElement;
   private area: HTMLElement;
   private selEl: HTMLElement;
   mode: Mode | '' = '';
@@ -257,7 +352,7 @@ class Row {
 
     const knobOpts = (key: 'pan' | 'vol') => ({
       def: CHANNEL_PARAMS[key],
-      size: 20,
+      size: 19,
       bipolar: key === 'pan',
       name: '',
       get: () => (this.ch()?.[key] as number) ?? CHANNEL_PARAMS[key].def,
@@ -291,18 +386,34 @@ class Row {
       { passive: false },
     );
 
-    this.nameTxt = el('span', { class: 'cr-name-t' });
-    this.name = el('div', { class: 'cr-name' }, el('span', { class: 'cr-name-c' }), this.nameTxt);
-    this.name.addEventListener('pointerdown', (e) => {
+    // channel button: click = select + open / close its window (FL), Ctrl = add to selection, Shift = range
+    this.btnTxt = el('span', { class: 'cr-btn-t' });
+    this.btnIcon = el('span', { class: 'cr-btn-i' });
+    this.btn = el('div', { class: 'cr-btn' }, this.btnTxt, this.btnIcon);
+    let plain = false;
+    this.btn.addEventListener('pointerdown', (e) => {
       if (e.button !== 0) return;
+      plain = !(e.ctrlKey || e.metaKey || e.shiftKey);
       clickSelect(this.id, e);
     });
-    this.name.addEventListener('dblclick', () => openSettings(this.id));
-    this.name.addEventListener('contextmenu', (e) => {
+    this.btn.addEventListener('click', (e) => {
+      if (e.button !== 0 || !plain) return;
+      plain = false;
+      toggleChannelWindow(this.id);
+    });
+    this.btn.addEventListener('contextmenu', (e) => {
       e.preventDefault();
       e.stopPropagation();
       if (!store.ui.selectedChannels.includes(this.id)) selectOnly(this.id);
       channelMenu(this.id, e.clientX, e.clientY);
+    });
+
+    // select bar (right of the button): toggles this channel in the selection
+    this.selEl = el('div', { class: 'cr-sel' }, el('i'));
+    this.selEl.addEventListener('pointerdown', (e) => {
+      if (e.button !== 0) return;
+      e.stopPropagation();
+      toggleSelected(this.id);
     });
 
     this.area = el('div', { class: 'cr-area' });
@@ -315,15 +426,8 @@ class Row {
       e.stopPropagation();
     });
 
-    this.selEl = el('div', { class: 'cr-sel' }, el('i'));
-    this.selEl.addEventListener('pointerdown', (e) => {
-      if (e.button !== 0) return;
-      e.stopPropagation();
-      toggleSelected(this.id);
-    });
-
-    const left = el('div', { class: 'cr-left' }, this.led, this.pan, this.vol, this.mix, this.name);
-    this.root = el('div', { class: 'cr-row', 'data-id': this.id }, left, this.area, this.selEl);
+    const left = el('div', { class: 'cr-left' }, this.led, this.pan, this.vol, this.mix, this.btn, this.selEl);
+    this.root = el('div', { class: 'cr-row', 'data-id': this.id }, left, this.area);
   }
 
   ch(): Channel | undefined {
@@ -405,7 +509,7 @@ class Row {
       e,
       (_dx, _dy, ev) => {
         const r = this.area.getBoundingClientRect();
-        const j = this.indexAt(ev.clientX - r.left);
+        const j = stepAt(ev.clientX - r.left, this.n);
         if (j === last) return;
         const a = Math.min(last, j), b = Math.max(last, j);
         for (let k = a; k <= b; k++) apply(k);
@@ -413,15 +517,6 @@ class Row {
       },
       () => store.end(),
     );
-  }
-
-  private indexAt(x: number): number {
-    // inverse of stepX, tolerant of gaps
-    const group = SW * 4 + SG * 3 + GG;
-    const g = Math.floor(x / group);
-    const within = x - g * group;
-    const k = clamp(Math.floor(within / (SW + SG)), 0, 3);
-    return clamp(g * 4 + k, 0, this.n - 1);
   }
 
   private paintStep(i: number, v: number) {
@@ -450,7 +545,7 @@ class Row {
       mode === 'steps'
         ? 'Steps — click toggles a step, drag paints, right-click / right-drag erases (Ctrl+Shift+F fills every 4 steps)'
         : mode === 'preview'
-          ? 'This channel has piano-roll notes — click to edit them in the Piano roll (F7)'
+          ? 'Piano roll preview — click to edit these notes in the Piano roll (F7)'
           : 'Audio clip channel — its audio plays from the Playlist · double-click for settings';
     if (mode === 'steps') {
       const frag = document.createDocumentFragment();
@@ -475,15 +570,24 @@ class Row {
     const root = this.root;
     if (L.color !== c.color) {
       L.color = c.color;
+      // FL channel button: the channel colour, a little muted, with a soft vertical gradient
       root.style.setProperty('--cc', c.color);
-      root.style.setProperty('--lit', `linear-gradient(180deg, ${shade(c.color, 0.62)}, ${shade(c.color, 0.28)})`);
+      root.style.setProperty('--b1', mixRgb(c.color, '#7d8a84', 0.28, 0.06));
+      root.style.setProperty('--b2', mixRgb(c.color, '#5a6660', 0.32, -0.14));
+      root.style.setProperty('--b3', mixRgb(c.color, '#8e9b95', 0.18, 0.22));
       root.style.setProperty('--ccs', rgba(c.color, 0.22));
       this.drawSig = '';
+    }
+    const icon = instrumentIcon(c);
+    if (L.icon !== icon) {
+      L.icon = icon;
+      this.btnIcon.innerHTML = icon;
+      this.btn.classList.toggle('has-icon', !!icon);
     }
     const nameChanged = L.name !== c.name;
     if (nameChanged) {
       L.name = c.name;
-      setText(this.nameTxt, c.name);
+      setText(this.btnTxt, c.name);
       for (const o of this.knobOpts) o.name = c.name;
     }
     const sel = u.sel.has(c.id);
@@ -512,14 +616,14 @@ class Row {
       this.mix.classList.toggle('master', c.mixer === 0);
       setHint(this.mix, `Mixer track: ${c.mixer === 0 ? 'Master' : `${c.mixer} · ${mname}`} — drag up/down or scroll to change, click to select it in the mixer (Ctrl+L routes to a free track)`);
     }
-    const kind = c.type === 'synth' ? 'Tri-Osc synth' : c.audioClip ? 'Audio clip' : `Sampler · ${c.sampler?.sampleName ?? ''}`;
-    setHint(this.name, `${c.name} (${kind}, group ${groupOf(c)}) — click select · Ctrl+click toggle · Shift+click range · double-click settings · right-click menu`);
-    setHint(this.selEl, sel ? 'Selected — click to deselect' : 'Click to add to the selection');
-    root.classList.toggle('synth', c.type === 'synth');
+    const win = c.type === 'plugin' ? 'plugin window' : 'channel settings';
+    setHint(this.btn, `${c.name} (${instrumentName(c)}, group ${groupOf(c)}) — click: select + open / close the ${win} · Ctrl+click: add to selection · Shift+click: range · right-click: menu (replace instrument…) · F2: rename`);
+    setHint(this.selEl, sel ? `${c.name} is selected — click to deselect` : `Select ${c.name} (adds it to the selection)`);
+    root.classList.toggle('synth', c.type !== 'sampler');
 
     // ---- step strip ----
     const notes = u.pattern.notes[c.id] ?? [];
-    const mode: Mode = c.audioClip ? 'wave' : notes.every(isStepNote) ? 'steps' : 'preview';
+    const mode: Mode = c.audioClip ? 'wave' : view.roll || !notes.every(isStepNote) ? 'preview' : 'steps';
     if (mode !== this.mode || u.n !== this.n || u.spb !== this.spb) this.buildArea(mode, u.n, u.spb);
     if (mode === 'steps') this.updateSteps(notes);
     else if (mode === 'preview') this.drawPreview(notes, c);
@@ -574,7 +678,7 @@ class Row {
     // beat grid
     for (let b = 0; b < this.n; b += 4) {
       const x = Math.round((b * STEP * w) / total) + 0.5;
-      g.fillStyle = b % this.spb === 0 ? 'rgba(255,255,255,0.10)' : 'rgba(255,255,255,0.045)';
+      g.fillStyle = b % this.spb === 0 ? 'rgba(0,0,0,0.32)' : 'rgba(0,0,0,0.14)';
       g.fillRect(x, 0, 1, ROW_H);
     }
     if (!notes.length) return;
@@ -589,16 +693,15 @@ class Row {
     const mid = (lo + hi) / 2;
     lo = mid - span / 2;
     const pad = 3;
-    const nh = clamp((ROW_H - pad * 2) / span, 3, 5);
+    const nh = clamp((ROW_H - pad * 2) / span, 2, 4);
+    // FL draws the mini piano roll in light green, like the Piano roll notes
     for (const x of notes) {
       const x0 = (x.start / total) * w;
       const x1 = Math.min(w, ((x.start + x.len) / total) * w);
       const y = pad + (1 - (x.key - lo) / span) * (ROW_H - pad * 2 - nh);
-      g.globalAlpha = x.muted ? 0.3 : 0.55 + x.vel * 0.45;
-      g.fillStyle = shade(c.color, 0.35);
-      g.beginPath();
-      g.roundRect(x0, y, Math.max(2, x1 - x0 - 1), nh, 1);
-      g.fill();
+      g.globalAlpha = x.muted ? 0.3 : 0.6 + x.vel * 0.4;
+      g.fillStyle = '#9fe08f';
+      g.fillRect(x0, Math.round(y), Math.max(2, x1 - x0 - 1), nh);
     }
     g.globalAlpha = 1;
   }
@@ -615,7 +718,7 @@ class Row {
     const pk = loaded ? samples.peaks(ref, Math.max(16, Math.min(1024, Math.round(w)))) : null;
     const mid = ROW_H / 2;
     if (!pk) {
-      g.fillStyle = 'rgba(255,255,255,0.25)';
+      g.fillStyle = 'rgba(255,255,255,0.35)';
       g.font = '10px sans-serif';
       g.fillText(ref ? 'Loading audio…' : 'No sample', 6, mid + 3);
       return;
@@ -625,7 +728,7 @@ class Row {
     let m = 0.0001;
     for (let i = 0; i < pk.length; i++) m = Math.max(m, Math.abs(pk[i]));
     const amp = (mid - 2) / m;
-    g.fillStyle = shade(c.color, 0.3);
+    g.fillStyle = mixRgb(c.color, '#ffffff', 0.45);
     g.beginPath();
     for (let i = 0; i < nb; i++) {
       const k = rev ? nb - 1 - i : i;
@@ -667,6 +770,154 @@ class Row {
 }
 
 // ---------------------------------------------------------------------------
+// graph editor (FL: velocity / pan of each step of the selected channel)
+// ---------------------------------------------------------------------------
+class GraphEditor {
+  readonly root: HTMLElement;
+  private area: HTMLElement;
+  private title: HTMLElement;
+  private msg: HTMLElement;
+  private tabs: HTMLElement[] = [];
+  private bars: HTMLElement[] = [];
+  private n = 0;
+  private sig = '';
+  private chId: ID | null = null;
+
+  constructor() {
+    this.title = el('div', { class: 'cr-g-ch' });
+    const tabs = el('div', { class: 'cr-g-tabs' });
+    for (const m of ['vel', 'pan'] as const) {
+      const b = el('button', { class: 'cr-g-tab', text: m === 'vel' ? 'Velocity' : 'Panning', 'data-hint': m === 'vel' ? 'Graph editor: step velocities' : 'Graph editor: step panning' });
+      b.addEventListener('click', () => {
+        view.graphMode = m;
+        saveView();
+        this.sig = '';
+        this.sync();
+      });
+      (b as any)._m = m;
+      this.tabs.push(b);
+      tabs.append(b);
+    }
+    const left = el('div', { class: 'cr-g-left' }, tabs, this.title);
+    this.msg = el('div', { class: 'cr-g-msg' });
+    this.area = el('div', { class: 'cr-g-area', 'data-hint': 'Graph editor — drag to draw the value of each step of the selected channel · right-drag resets' }, this.msg);
+    this.root = el('div', { class: 'cr-graph' }, left, this.area);
+    this.area.addEventListener('contextmenu', (e) => e.preventDefault());
+    this.area.addEventListener('pointerdown', (e) => this.down(e));
+  }
+
+  private target(): { ch: Channel; notes: Note[]; steps: boolean } | null {
+    const ch = store.channel(store.ui.selectedChannels[0]);
+    if (!ch) return null;
+    const notes = store.currentPattern.notes[ch.id] ?? [];
+    return { ch, notes, steps: !ch.audioClip && notes.every(isStepNote) };
+  }
+
+  private valAt(y: number): number {
+    const r = this.area.getBoundingClientRect();
+    const f = clamp(1 - (y - r.top - 4) / Math.max(1, r.height - 8), 0, 1);
+    return view.graphMode === 'vel' ? Math.max(0.01, f) : f * 2 - 1;
+  }
+
+  private down(e: PointerEvent) {
+    if (e.button !== 0 && e.button !== 2) return;
+    const t = this.target();
+    if (!t || !t.steps || !t.notes.length) return;
+    e.preventDefault();
+    const reset = e.button === 2;
+    const mode = view.graphMode;
+    const pid = store.currentPattern.id, cid = t.ch.id;
+    const r0 = this.area.getBoundingClientRect();
+    let lastI = stepAt(e.clientX - r0.left, this.n);
+    let lastV = reset ? (mode === 'vel' ? 0.78 : 0) : this.valAt(e.clientY);
+    store.begin(mode === 'vel' ? 'Step velocity' : 'Step panning');
+    const apply = (i0: number, v0: number, i1: number, v1: number) => {
+      const a = Math.min(i0, i1), b = Math.max(i0, i1);
+      store.live((p) => {
+        const pt = p.patterns.find((x) => x.id === pid);
+        const arr = pt?.notes[cid];
+        if (!arr) return;
+        for (const nt of arr) {
+          const i = nt.start / STEP;
+          if (i < a || i > b) continue;
+          const f = i1 === i0 ? 1 : (i - i0) / (i1 - i0);
+          const v = Math.round((v0 + (v1 - v0) * f) * 1000) / 1000;
+          if (mode === 'vel') nt.vel = clamp(v, 0.01, 1);
+          else nt.pan = clamp(v, -1, 1);
+        }
+      });
+      lockHint(mode === 'vel' ? `Velocity ${Math.round(v1 * 100)}%` : `Pan ${Math.round(v1 * 100)}`);
+    };
+    apply(lastI, lastV, lastI, lastV);
+    drag(
+      e,
+      (_dx, _dy, ev) => {
+        const r = this.area.getBoundingClientRect();
+        const i = stepAt(ev.clientX - r.left, this.n);
+        const v = reset ? lastV : this.valAt(ev.clientY);
+        apply(lastI, lastV, i, v);
+        lastI = i;
+        lastV = v;
+      },
+      () => {
+        lockHint(null);
+        store.end();
+      },
+    );
+  }
+
+  sync(n = this.n) {
+    this.root.style.display = view.graph ? '' : 'none';
+    for (const b of this.tabs) b.classList.toggle('on', (b as any)._m === view.graphMode);
+    if (!view.graph) return;
+    const t = this.target();
+    if (n !== this.n || t?.ch.id !== this.chId) {
+      this.n = n;
+      this.chId = t?.ch.id ?? null;
+      this.area.style.width = stripW(n) + 'px';
+      for (const b of this.bars) b.remove();
+      this.bars = [];
+      for (let i = 0; i < n; i++) {
+        const b = el('div', { class: 'cr-g-bar', style: { left: stepX(i) + 'px', width: SW + 'px' } });
+        this.bars.push(b);
+        this.area.append(b);
+      }
+      this.sig = '';
+    }
+    setText(this.title, t ? t.ch.name : '—');
+    this.title.style.setProperty('--cc', t?.ch.color ?? '#7a8287');
+    const mode = view.graphMode;
+    let sig = mode + '|' + (t?.ch.id ?? '') + '|' + (t?.steps ? 1 : 0);
+    if (t) for (const x of t.notes) sig += `|${x.start},${mode === 'vel' ? x.vel : x.pan},${x.muted ? 1 : 0}`;
+    if (sig === this.sig) return;
+    this.sig = sig;
+    const H = GRAPH_H - 8;
+    const vals: (number | null)[] = new Array(n).fill(null);
+    if (t?.steps) for (const x of t.notes) if (x.start / STEP < n) vals[x.start / STEP] = mode === 'vel' ? x.vel : x.pan;
+    this.msg.textContent = !t ? '' : t.ch.audioClip ? 'Audio clip channel' : !t.steps ? 'This channel uses the Piano roll — edit its notes there (F7)' : !t.notes.length ? 'No steps' : '';
+    this.root.classList.toggle('pan', mode === 'pan');
+    for (let i = 0; i < n; i++) {
+      const b = this.bars[i];
+      const v = vals[i];
+      if (v === null) {
+        b.style.display = 'none';
+        continue;
+      }
+      b.style.display = '';
+      if (mode === 'vel') {
+        b.style.top = 4 + Math.round((1 - v) * H) + 'px';
+        b.style.height = Math.max(2, Math.round(v * H)) + 'px';
+      } else {
+        const mid = 4 + H / 2;
+        const y = 4 + (1 - (v + 1) / 2) * H;
+        b.style.top = Math.round(Math.min(mid, y)) + 'px';
+        b.style.height = Math.max(2, Math.round(Math.abs(y - mid))) + 'px';
+      }
+    }
+  }
+}
+
+// ---------------------------------------------------------------------------
 // window
 // ---------------------------------------------------------------------------
 export function createChannelRack(): PanelDef {
@@ -677,16 +928,18 @@ export function createChannelRack(): PanelDef {
   const visible = () => !!wm?.get('channelrack')?.visible;
 
   const list = el('div', { class: 'cr-rows' });
-  const filler = el('div', { class: 'cr-filler', 'data-hint': 'Drop samples or synth presets here to add channels · right-click for the add menu' }, el('div', { class: 'cr-filler-t' }));
-  const scroll = el('div', { class: 'cr-scroll' }, list, filler);
-  const addBtn = el('button', { class: 'cr-add', 'data-hint': 'Add a channel: Tri-Osc synth presets, sampler sounds, audio files, more plugins' }, el('span', { class: 'cr-add-i', html: IC.plus }), el('span', { text: 'Add channel' }));
+  const filler = el('div', { class: 'cr-filler', 'data-hint': 'Drop samples, synth presets or plugins here to add channels · right-click for the add menu' }, el('div', { class: 'cr-filler-t' }));
+  const graph = new GraphEditor();
+  const scroll = el('div', { class: 'cr-scroll' }, list, filler, graph.root);
+  const addBtn = el('button', { class: 'cr-add', 'data-hint': 'Add a channel: plugins, Tri-Osc synth presets, sampler sounds, audio files' }, el('span', { class: 'cr-add-i', html: IC.plus }));
   const footInfo = el('div', { class: 'cr-foot-i' });
-  const foot = el('div', { class: 'cr-foot' }, addBtn, footInfo);
+  const foot = el('div', { class: 'cr-foot' }, el('div', { class: 'cr-foot-l' }), addBtn, footInfo);
   const root = el('div', { class: 'cr' }, scroll, foot);
   root.style.setProperty('--sw', SW + 'px');
   root.style.setProperty('--sg', SG + 'px');
   root.style.setProperty('--gg', GG + 'px');
   root.style.setProperty('--rh', ROW_H + 'px');
+  root.style.setProperty('--gh', GRAPH_H + 'px');
 
   const showAdd = (x: number, y: number) => showMenu(addMenuItems(), Math.max(0, Math.min(x, innerWidth - 560)), y);
   addBtn.addEventListener('click', () => {
@@ -702,7 +955,19 @@ export function createChannelRack(): PanelDef {
     showAdd(r.left, r.top - 4);
   });
 
-  // ---- header extra ----
+  // ---- header extra (FL: ▸ menu · group filter · swing · view toggles · step count) ----
+  const menuBtn = el('button', { class: 'cr-hbtn cr-menu', html: IC.arrow, 'data-hint': 'Channel rack options — add, clone, group, fill, views, step count' });
+  menuBtn.addEventListener('click', () => {
+    const r = menuBtn.getBoundingClientRect();
+    showMenu(rackMenu(), r.left, r.bottom + 2);
+  });
+  const groupSel = el('select', { class: 'cr-groupsel', 'data-hint': 'Channel group filter — PageUp / PageDown cycle groups, Alt+G groups the selected channels' }) as HTMLSelectElement;
+  groupSel.addEventListener('change', () => {
+    store.setUI({ channelGroup: groupSel.value });
+    groupSel.blur();
+  });
+  groupSel.addEventListener('keydown', (e) => e.stopPropagation());
+  const groupBox = el('div', { class: 'cr-group' }, el('span', { class: 'cr-group-i', html: IC.filter }), groupSel);
   const patSw = el('span', { class: 'cr-pat-sw' });
   const patName = el('span', { class: 'cr-pat-name' });
   const patBtn = el('button', { class: 'cr-pat', 'data-hint': 'Current pattern — click for the pattern menu (1–9 select when the rack is not focused, F4 new, F2 rename)' }, patSw, patName, el('span', { class: 'cr-caret', html: IC.caret }));
@@ -713,17 +978,34 @@ export function createChannelRack(): PanelDef {
   const swingVal = el('span', { class: 'cr-swing-v' });
   const swing = knob({
     def: SWING_DEF,
-    size: 20,
+    size: 19,
     name: 'Project',
     get: () => store.project.swing,
     set: (v) => store.live((p) => (p.swing = v)),
     begin: () => store.begin('Swing'),
     end: () => store.end(),
   });
-  const swingBox = el('div', { class: 'cr-swing', 'data-hint': 'Swing — delays every second 16th step (drag, scroll, double-click resets)' }, swing, el('span', { class: 'cr-hlbl', text: 'Swing' }), swingVal);
+  const swingBox = el('div', { class: 'cr-swing', 'data-hint': 'Swing — delays every second 16th step (drag, scroll, double-click resets)' }, el('span', { class: 'cr-hlbl', text: 'Swing' }), swing, swingVal);
+  const graphBtn = el('button', { class: 'cr-hbtn cr-tg', html: IC.graph, 'data-hint': 'Graph editor — draw step velocity / panning of the selected channel' });
+  graphBtn.addEventListener('click', () => {
+    view.graph = !view.graph;
+    saveView();
+    sync(true);
+  });
+  const rollBtn = el('button', { class: 'cr-hbtn cr-tg', html: IC.roll, 'data-hint': 'Piano roll view — show every channel as a mini piano roll (click a row to edit it)' });
+  rollBtn.addEventListener('click', () => {
+    view.roll = !view.roll;
+    saveView();
+    sync(true);
+  });
   const stepsBtn = el('button', { class: 'cr-stepsbtn', 'data-hint': 'Step count / pattern length — click to choose (Auto grows with the notes)' }, el('span', { class: 'cr-hi', html: IC.steps }), el('span', { class: 'cr-steps-t' }));
   stepsBtn.addEventListener('click', () => {
     const r = stepsBtn.getBoundingClientRect();
+    showMenu(stepItems(), r.left, r.bottom + 2);
+  });
+  const headerExtra = el('div', { class: 'cr-hx' }, menuBtn, groupBox, el('div', { class: 'cr-hx-sp' }), patBtn, swingBox, el('div', { class: 'cr-hx-sep' }), graphBtn, rollBtn, stepsBtn);
+
+  function stepItems(): MenuItem[] {
     const pt = store.currentPattern;
     const bar = store.barTicks;
     const setLen = (len: number) =>
@@ -732,35 +1014,35 @@ export function createChannelRack(): PanelDef {
         if (x) x.length = len;
       });
     const counts = [16, 32, 48, 64, 96, 128, 256];
-    showMenu(
-      [
-        { label: 'Auto (fit notes)', checked: pt.length === 0, action: () => setLen(0) },
-        { sep: true },
-        ...counts.map((n) => {
-          const bars = (n * STEP) / bar;
-          return { label: `${n} steps · ${+bars.toFixed(2)} bar${bars === 1 ? '' : 's'}`, checked: pt.length === n * STEP, action: () => setLen(n * STEP) };
-        }),
-      ],
-      r.left,
-      r.bottom + 2,
-    );
-  });
-  const groupSel = el('select', { class: 'select cr-groupsel', 'data-hint': 'Channel group filter — PageUp / PageDown cycle groups, Alt+G groups the selected channels' }) as HTMLSelectElement;
-  groupSel.addEventListener('change', () => {
-    store.setUI({ channelGroup: groupSel.value });
-    groupSel.blur();
-  });
-  groupSel.addEventListener('keydown', (e) => e.stopPropagation());
-  const headerExtra = el(
-    'div',
-    { class: 'cr-hx' },
-    patBtn,
-    swingBox,
-    stepsBtn,
-    el('div', { class: 'cr-hx-sp' }),
-    el('span', { class: 'cr-hi dim', html: IC.filter }),
-    groupSel,
-  );
+    return [
+      { label: 'Auto (fit notes)', checked: pt.length === 0, action: () => setLen(0) },
+      { sep: true },
+      ...counts.map((n) => {
+        const bars = (n * STEP) / bar;
+        return { label: `${n} steps · ${+bars.toFixed(2)} bar${bars === 1 ? '' : 's'}`, checked: pt.length === n * STEP, action: () => setLen(n * STEP) };
+      }),
+    ];
+  }
+
+  function rackMenu(): MenuItem[] {
+    const ids = orderedSelection();
+    const n = ids.length;
+    return [
+      { label: 'Add one', submenu: addMenuItems() },
+      { label: 'Select all channels', action: () => store.setUI({ selectedChannels: visibleChannels().map((c) => c.id) }) },
+      { sep: true },
+      { label: `Clone selected (${n})`, shortcut: keyFor('cr.clone'), disabled: !n, action: () => cloneChannels(ids) },
+      { label: `Delete selected (${n})…`, shortcut: keyFor('cr.delete'), disabled: !n, action: () => confirmDelete(ids) },
+      { label: 'Group selected…', shortcut: keyFor('cr.group'), disabled: !n, action: () => promptGroup(ids) },
+      { label: 'Route selected to free mixer tracks', shortcut: keyFor('cr.route'), disabled: !n, action: () => routeToFreeTracks(ids) },
+      { label: 'Fill each 4 steps', shortcut: keyFor('cr.fill4'), disabled: !n, action: () => fillSteps(ids, 4) },
+      { label: 'Clear steps', disabled: !n, action: () => clearSteps(ids) },
+      { sep: true },
+      { label: 'Graph editor', checked: view.graph, action: () => graphBtn.click() },
+      { label: 'Piano roll view', checked: view.roll, action: () => rollBtn.click() },
+      { label: 'Step count', submenu: stepItems() },
+    ];
+  }
 
   let groupSig = '';
   function updateHeader(n: number) {
@@ -770,13 +1052,15 @@ export function createChannelRack(): PanelDef {
     patSw.style.background = pt?.color ?? '#7a8287';
     swing.update();
     setText(swingVal, Math.round(store.project.swing * 100) + '%');
-    setText(stepsBtn.lastChild as HTMLElement, `${n}${pt?.length ? '' : ' · auto'}`);
+    setText(stepsBtn.lastChild as HTMLElement, `${n}${pt?.length ? '' : ' auto'}`);
+    graphBtn.classList.toggle('on', view.graph);
+    rollBtn.classList.toggle('on', view.roll);
     const opts = groupOptions();
     const gs = opts.join('|');
     if (gs !== groupSig) {
       groupSig = gs;
       groupSel.textContent = '';
-      for (const g of opts) groupSel.append(el('option', { value: g, text: g === 'All' ? 'All channels' : g }));
+      for (const g of opts) groupSel.append(el('option', { value: g, text: g }));
     }
     const v = opts.includes(store.ui.channelGroup) ? store.ui.channelGroup : 'All';
     if (groupSel.value !== v) groupSel.value = v;
@@ -830,12 +1114,13 @@ export function createChannelRack(): PanelDef {
       mixerNames: store.project.mixer.map((m) => m.name),
     };
     for (const r of order) r.update(u);
+    graph.sync(n);
     updateHeader(n);
     const total = store.project.channels.length;
     const g = store.ui.channelGroup;
     const filt = g && g !== 'All';
-    setText(footInfo, filt ? `${vis.length} of ${total} channels · group “${g}”` : `${total} channel${total === 1 ? '' : 's'}`);
-    setText(filler.firstChild as HTMLElement, vis.length ? 'Drop samples or presets here to add channels' : filt ? `No channels in “${g}” — drop sounds here or pick another group` : 'No channels yet — click “Add channel” or drop sounds here');
+    setText(footInfo, filt ? `${vis.length} of ${total} · ${g}` : `${total} channel${total === 1 ? '' : 's'}`);
+    setText(filler.firstChild as HTMLElement, vis.length ? '' : filt ? `No channels in “${g}” — drop sounds here or pick another group` : 'No channels yet — click + or drop sounds / plugins here');
     root.classList.toggle('empty', !vis.length);
   }
 
@@ -844,8 +1129,9 @@ export function createChannelRack(): PanelDef {
     if (!r) return;
     const top = r.root.offsetTop - list.offsetTop;
     const bottom = top + r.root.offsetHeight;
+    const gh = view.graph ? GRAPH_H : 0;
     if (top < scroll.scrollTop) scroll.scrollTop = top;
-    else if (bottom > scroll.scrollTop + scroll.clientHeight) scroll.scrollTop = bottom - scroll.clientHeight;
+    else if (bottom > scroll.scrollTop + scroll.clientHeight - gh) scroll.scrollTop = bottom - scroll.clientHeight + gh;
   }
 
   // ---- playhead (pattern mode) ----
@@ -869,9 +1155,10 @@ export function createChannelRack(): PanelDef {
   };
   engine.on('state', startPlayhead);
 
-  // ---- drag & drop ----
-  type DropKind = 'sample' | 'preset';
-  const dropKind = (e: DragEvent): DropKind | null => (hasType(e, DT_PRESET) ? 'preset' : hasType(e, DT_SAMPLE) || hasType(e, 'Files') ? 'sample' : null);
+  // ---- drag & drop: samples, synth presets, instrument plugins ----
+  type DropKind = 'sample' | 'preset' | 'plugin';
+  const dropKind = (e: DragEvent): DropKind | null =>
+    hasType(e, DT_PLUGIN) ? 'plugin' : hasType(e, DT_PRESET) ? 'preset' : hasType(e, DT_SAMPLE) || hasType(e, 'Files') ? 'sample' : null;
   const rowAt = (t: EventTarget | null): Row | undefined => {
     const r = (t as HTMLElement | null)?.closest?.('.cr-row') as HTMLElement | null;
     return r ? rows.get(r.dataset.id ?? '') : undefined;
@@ -890,6 +1177,7 @@ export function createChannelRack(): PanelDef {
     let r = rowAt(e.target) ?? null;
     const ch = r?.ch();
     if (r && kind === 'preset' && ch?.type !== 'synth') r = null; // presets on a sampler row add a new synth
+    if (r && kind === 'plugin' && ch?.audioClip) r = null;
     if (r !== dropRow) {
       dropRow?.root.classList.remove('drop');
       r?.root.classList.add('drop');
@@ -907,6 +1195,20 @@ export function createChannelRack(): PanelDef {
     const r = dropRow;
     clearDrop();
     const ch = r?.ch();
+    if (kind === 'plugin') {
+      e.stopPropagation();
+      const d = readDrag<{ pluginType?: string; type?: string; id?: string }>(e, DT_PLUGIN);
+      const choice = resolveInstrument(d?.pluginType ?? d?.type ?? d?.id);
+      if (!choice) {
+        toast('That plugin is not an instrument', 'warn', 1600);
+        return;
+      }
+      if (ch) {
+        const nid = await confirmReplace(ch.id, choice);
+        if (nid) toast(`${store.channel(nid)?.name ?? 'Channel'} now uses ${choice.name}`, 'ok', 1400);
+      } else addInstrumentChannel(choice);
+      return;
+    }
     if (kind === 'preset') {
       const d = readDrag<{ preset: string }>(e, DT_PRESET);
       if (!d?.preset) return;
@@ -916,17 +1218,17 @@ export function createChannelRack(): PanelDef {
       } else addSynthChannel(d.preset);
       return;
     }
-    const list = await samplesFromDrop(e);
-    if (!list.length) return;
+    const files = await samplesFromDrop(e);
+    if (!files.length) return;
     if (ch) {
-      if (await replaceSample(ch.id, list[0])) {
-        selectOnly(ch.id);
-        toast(`${store.channel(ch.id)?.name ?? 'Channel'} now plays “${list[0].name}”`, 'ok', 1400);
+      if (await replaceSample(ch.id, files[0])) {
+        if (store.channel(ch.id)) selectOnly(ch.id); // (a converted synth / plugin got a new id and keeps its selection)
+        toast(`${store.channel(ch.id)?.name ?? 'Sampler'} now plays “${files[0].name}”`, 'ok', 1400);
       }
       return;
     }
-    for (const s of list) addSamplerChannel(s);
-    if (list.length > 1) toast(`Added ${list.length} sampler channels`, 'ok', 1400);
+    for (const s of files) addSamplerChannel(s);
+    if (files.length > 1) toast(`Added ${files.length} sampler channels`, 'ok', 1400);
   });
 
   // ---- store wiring ----
@@ -1040,7 +1342,7 @@ function registerRackCommands(api: { ensureRowVisible: (id: ID) => void }) {
     c('cr.nextGroup', 'Next channel group', ['PageUp'], () => cycleGroup(1)),
     c('cr.prevGroup', 'Previous channel group', ['PageDown'], () => cycleGroup(-1)),
     c('cr.rename', 'Rename selected channel…', ['F2'], () => renameChannel(store.ui.selectedChannels[0])),
-    c('cr.settings', 'Open channel settings', [], () => {
+    c('cr.settings', 'Open channel settings / plugin window', [], () => {
       const id = store.ui.selectedChannels[0];
       if (id) openSettings(id);
     }),

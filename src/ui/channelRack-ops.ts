@@ -3,12 +3,16 @@
 import { store } from '../core/store';
 import { Channel, ID, Note, Pattern, STEP } from '../core/types';
 import { PALETTE, deepClone, uid } from '../core/util';
-import { SYNTH_PRESETS, defaultSampler, synthPreset } from '../core/project';
+import { SYNTH_PRESETS, defaultSampler, newChannel, synthPreset } from '../core/project';
 import { colorMenu, confirmDialog, promptDialog, toast } from './widgets';
 import { addChannel, deleteChannels } from './ops';
 import { samples } from '../audio/samples';
 import { BUILTIN_BY_ID } from '../audio/sounds';
+import { allInstruments, getInstrument } from '../audio/plugins/registry';
 import type { DragSample } from './dnd';
+
+/** Browser drag of an instrument plugin: JSON { pluginType }. (Shared constant belongs in dnd.ts.) */
+export const DT_PLUGIN = 'application/x-loopforge-plugin';
 
 export const STEP_KEY = 60;
 export const STEP_VEL = 0.78;
@@ -311,21 +315,17 @@ export async function replaceSample(chId: ID, s: DragSample): Promise<boolean> {
   if (!ch) return false;
   const name = s.name || samples.displayName(s.ref);
   if (ch.type !== 'sampler') {
-    const r = await confirmDialog('Replace instrument', `“${ch.name}” is a Tri-Osc synth. Turn it into a sampler playing “${name}”?\nIts notes, mixer routing, volume and pan are kept.`, [
+    const what = ch.type === 'synth' ? 'a Tri-Osc synth' : `a ${getInstrument(ch.plugin?.type)?.name ?? 'plugin'} channel`;
+    const r = await confirmDialog('Replace instrument', `“${ch.name}” is ${what}. Turn it into a sampler playing “${name}”?\nIts notes, mixer routing, volume and pan are kept.`, [
       { label: 'Cancel', value: 'no' },
       { label: 'Make sampler', value: 'yes', primary: true },
     ], 'no');
     if (r !== 'yes') return false;
-    store.commit('Convert to sampler', (p) => {
-      const c = findCh(p, chId);
-      if (!c) return;
-      c.type = 'sampler';
+    return !!replaceInstrument(chId, { kind: 'sampler', name: 'Sampler' }, (c) => {
       c.sampler = defaultSampler(s.ref, name);
       c.sampler.sampleName = name;
-      delete c.synth;
       c.name = name;
-    });
-    return true;
+    }, 'Convert to sampler');
   }
   store.commit('Replace sample', (p) => {
     const c = findCh(p, chId);
@@ -349,6 +349,112 @@ export function applyPreset(chId: ID, preset: string) {
     c.synth = synthPreset(preset);
     if (c.name === 'Tri-Osc' || presetNames.has(c.name)) c.name = preset === 'Init' ? 'Tri-Osc' : preset;
   });
+}
+
+// ---------------------------------------------------------------------------
+// instruments: plugins, replacement
+// ---------------------------------------------------------------------------
+export type InstrumentKind = 'sampler' | 'synth' | 'plugin';
+export interface InstrumentChoice {
+  kind: InstrumentKind;
+  pluginType?: string;
+  name: string;
+  icon?: string;
+}
+
+/** Everything a channel can be turned into: registered plugins + the two built-in instruments. */
+export function instrumentChoices(): InstrumentChoice[] {
+  return [
+    ...allInstruments().map((p) => ({ kind: 'plugin' as const, pluginType: p.id, name: p.name, icon: p.icon })),
+    { kind: 'synth', name: 'Tri-Osc' },
+    { kind: 'sampler', name: 'Sampler' },
+  ];
+}
+
+/** Map a dragged / requested plugin id to an instrument (tolerates the built-in instruments' names). */
+export function resolveInstrument(type: string | undefined | null): InstrumentChoice | null {
+  if (!type) return null;
+  const plug = getInstrument(type);
+  if (plug) return { kind: 'plugin', pluginType: plug.id, name: plug.name, icon: plug.icon };
+  const t = type.toLowerCase();
+  if (/tri|synth|osc/.test(t)) return { kind: 'synth', name: 'Tri-Osc' };
+  if (/sampler|sample/.test(t)) return { kind: 'sampler', name: 'Sampler' };
+  return null;
+}
+
+/** Add a channel for an instrument choice (plugins land in the Synths group like Tri-Osc). */
+export function addInstrumentChannel(c: InstrumentChoice): ID {
+  if (c.kind === 'synth') return addSynthChannel('Init');
+  if (c.kind === 'sampler') {
+    const g = store.ui.channelGroup;
+    return addChannel('sampler', { name: 'Sampler', group: g && g !== 'All' ? g : 'Unsorted' });
+  }
+  return addChannel('plugin', { pluginType: c.pluginType, group: groupForSynth() });
+}
+
+function isDefaultName(c: Channel): boolean {
+  const n = c.name;
+  if (n === 'Sampler' || n === '(empty)' || n === 'Tri-Osc' || n === 'Plugin') return true;
+  if (c.sampler && n === c.sampler.sampleName) return true;
+  if (c.plugin && (n === c.plugin.preset || n === getInstrument(c.plugin.type)?.name)) return true;
+  if (c.synth && SYNTH_PRESETS.some((p) => p.name === n)) return true;
+  return false;
+}
+
+/**
+ * Replace a channel's instrument, keeping its notes (every pattern), mixer routing, volume, pan, pitch,
+ * colour, group and a user-given name. The channel gets a fresh id so a window open for the old
+ * instrument closes itself; notes, automation targets and the UI selection follow the new id.
+ */
+export function replaceInstrument(chId: ID, choice: InstrumentChoice, customize?: (c: Channel) => void, label = `Replace instrument with ${choice.name}`): ID | null {
+  const old = findCh(store.project, chId);
+  if (!old || old.audioClip) return null;
+  if (choice.kind === 'plugin' && !getInstrument(choice.pluginType)) {
+    toast(`Plugin "${choice.pluginType}" is not available`, 'warn');
+    return null;
+  }
+  const fresh = newChannel(choice.kind, choice.kind === 'plugin' ? { pluginType: choice.pluginType } : choice.kind === 'synth' ? { preset: 'Init' } : {});
+  const nc: Channel = {
+    ...fresh,
+    name: isDefaultName(old) ? fresh.name : old.name,
+    color: old.color,
+    vol: old.vol,
+    pan: old.pan,
+    pitch: old.pitch,
+    mute: old.mute,
+    mixer: old.mixer,
+    group: old.group,
+  };
+  customize?.(nc);
+  store.commit(label, (p) => {
+    const i = p.channels.findIndex((c) => c.id === chId);
+    if (i < 0) return;
+    p.channels[i] = nc;
+    for (const pt of p.patterns) {
+      if (!pt.notes[chId]) continue;
+      pt.notes[nc.id] = pt.notes[chId];
+      delete pt.notes[chId];
+    }
+    for (const a of p.automations) if (a.target.scope === 'channel' && a.target.id === chId) a.target.id = nc.id;
+  });
+  const swap = (x: ID | null) => (x === chId ? nc.id : x);
+  store.setUI({
+    selectedChannels: store.ui.selectedChannels.map((x) => swap(x)!),
+    pianoRollChannel: swap(store.ui.pianoRollChannel),
+    settingsChannel: swap(store.ui.settingsChannel),
+  });
+  return nc.id;
+}
+
+/** Ask before replacing (drops onto an existing channel). */
+export async function confirmReplace(chId: ID, choice: InstrumentChoice): Promise<ID | null> {
+  const ch = findCh(store.project, chId);
+  if (!ch || ch.audioClip) return null;
+  const r = await confirmDialog('Replace instrument', `Replace the instrument of “${ch.name}” with ${choice.name}?\nIts notes, mixer routing, volume and pan are kept (Ctrl+Z undoes).`, [
+    { label: 'Cancel', value: 'no' },
+    { label: 'Replace', value: 'yes', primary: true },
+  ], 'no');
+  return r === 'yes' ? replaceInstrument(chId, choice) : null;
 }
 
 /** Name of the preset whose parameters match the synth exactly, or null when edited. */

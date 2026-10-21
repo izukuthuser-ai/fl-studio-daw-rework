@@ -97,23 +97,25 @@ export function gridUnit(ppt: number, timeSig: [number, number], minPx = 11): nu
 // colours
 // ---------------------------------------------------------------------------
 export const COL = {
-  // FL-style slate playlist
-  bg: '#343c41',
-  rowA: '#3b4449',
-  rowB: '#384045',
-  rowMuted: '#30373b',
-  virtual: '#323a3f',
-  sep: '#2a3135',
-  sepHi: 'rgba(255,255,255,0.04)',
-  shade: 'rgba(255,255,255,0.035)',
-  lineStep: 'rgba(16,20,23,0.12)',
-  lineBeat: 'rgba(16,20,23,0.24)',
-  lineBar: 'rgba(16,20,23,0.48)',
-  lineGroup: 'rgba(16,20,23,0.70)',
+  // FL 21-style teal slate playlist
+  bg: '#34434a',
+  rowA: '#3a4a52',
+  rowB: '#38474f',
+  rowMuted: '#313d43',
+  virtual: '#35434a',
+  sep: '#2b373d',
+  sepHi: 'rgba(255,255,255,0.035)',
+  shade: 'rgba(0,0,0,0.07)',
+  lineStep: 'rgba(14,22,26,0.14)',
+  lineBeat: 'rgba(14,22,26,0.28)',
+  lineBar: 'rgba(14,22,26,0.52)',
+  lineGroup: 'rgba(10,16,19,0.75)',
   sel: 'rgba(100,195,230,0.10)',
   selEdge: 'rgba(100,195,230,0.8)',
   accent: '#ff9d2a',
   accent2: '#64c3e6',
+  marker: '#b4e05c',
+  play: '#7dffa8',
   text: '#dde4e8',
   dim: '#a5b1b8',
   faint: '#78868f',
@@ -139,6 +141,7 @@ interface ClipPal {
   title: string;
   titleSel: string;
   text: string;
+  shadow: string;
   content: string;
   contentFill: string;
   edge: string;
@@ -152,25 +155,59 @@ function pal(color: string, muted: boolean): ClipPal {
   let c = safeRgb(color);
   if (muted) {
     const g = c[0] * 0.3 + c[1] * 0.59 + c[2] * 0.11;
-    c = [g * 0.55 + 70, g * 0.55 + 76, g * 0.55 + 82];
+    c = [g * 0.45 + 62, g * 0.45 + 70, g * 0.45 + 76];
   }
-  const dark: [number, number, number] = [24, 28, 32];
+  const dark: [number, number, number] = [26, 34, 39];
   const white: [number, number, number] = [255, 255, 255];
-  const lum = (c[0] * 0.299 + c[1] * 0.587 + c[2] * 0.114) / 255;
-  // FL look: darker coloured title strip, lighter tinted body, content drawn dark on the body
+  // FL 21 look: the clip colour on the title strip, a deeper tint of it on the body, and the
+  // notes / waveform / curve drawn in a light version of the colour on top
   p = {
-    body: mixRgb(c, [58, 66, 71], muted ? 0.62 : 0.38),
-    title: mixRgb(c, dark, muted ? 0.5 : 0.32),
-    titleSel: mixRgb(c, white, 0.25),
-    text: '#f4f7f8',
-    content: muted ? mixRgb(c, dark, 0.55) : mixRgb(c, dark, 0.7),
-    contentFill: `rgba(${dark[0]},${dark[1]},${dark[2]},${muted ? 0.18 : 0.28})`,
-    edge: mixRgb(c, dark, 0.78),
-    loopSep: `rgba(${dark[0]},${dark[1]},${dark[2]},0.4)`,
+    body: mixRgb(c, dark, muted ? 0.42 : 0.3),
+    title: mixRgb(c, white, muted ? 0 : 0.04),
+    titleSel: mixRgb(c, white, 0.42),
+    text: muted ? '#c9d0d4' : '#ffffff',
+    shadow: 'rgba(0,0,0,0.45)',
+    content: muted ? mixRgb(c, white, 0.22) : mixRgb(c, white, 0.6),
+    contentFill: muted ? 'rgba(255,255,255,0.06)' : mixRgbA(c, white, 0.3, 0.22),
+    edge: mixRgb(c, dark, 0.62),
+    loopSep: 'rgba(0,0,0,0.28)',
   };
   if (palCache.size > 400) palCache.clear();
   palCache.set(key, p);
   return p;
+}
+function mixRgbA(a: [number, number, number], b: [number, number, number], t: number, alpha: number) {
+  return `rgba(${Math.round(a[0] + (b[0] - a[0]) * t)},${Math.round(a[1] + (b[1] - a[1]) * t)},${Math.round(a[2] + (b[2] - a[2]) * t)},${alpha})`;
+}
+
+/** Small kind glyph drawn left of a clip name (pattern bracket / wave / curve), original artwork. */
+function drawKindGlyph(g: CanvasRenderingContext2D, kind: Clip['kind'], x: number, cy: number, color: string) {
+  g.strokeStyle = color;
+  g.lineWidth = 1.2;
+  g.lineCap = 'round';
+  g.beginPath();
+  if (kind === 'pattern') {
+    g.moveTo(x + 0.5, cy - 4);
+    g.lineTo(x + 0.5, cy + 4);
+    g.moveTo(x + 3, cy - 3);
+    g.lineTo(x + 7, cy - 3);
+    g.moveTo(x + 3, cy);
+    g.lineTo(x + 5.5, cy);
+    g.moveTo(x + 3, cy + 3);
+    g.lineTo(x + 8, cy + 3);
+  } else if (kind === 'audio') {
+    g.moveTo(x, cy);
+    g.lineTo(x + 1.6, cy - 2.5);
+    g.lineTo(x + 3.2, cy + 3);
+    g.lineTo(x + 4.8, cy - 4);
+    g.lineTo(x + 6.4, cy + 4);
+    g.lineTo(x + 8, cy - 1.5);
+  } else {
+    g.moveTo(x, cy + 3.5);
+    g.bezierCurveTo(x + 3.5, cy + 3.5, x + 4, cy - 3.5, x + 8, cy - 3.5);
+  }
+  g.stroke();
+  g.lineCap = 'butt';
 }
 
 // ---------------------------------------------------------------------------
@@ -396,7 +433,7 @@ export function drawClip(g: CanvasRenderingContext2D, v: View, p: Project, L: Lo
   const rx = vx0, rw = vx1 - vx0;
   const th = titleHeight(h);
 
-  roundRect(g, rx, y, rw, h, 3);
+  roundRect(g, rx, y, rw, h, 2);
   g.fillStyle = P.body;
   g.fill();
   g.save();
@@ -413,17 +450,20 @@ export function drawClip(g: CanvasRenderingContext2D, v: View, p: Project, L: Lo
     else if (ch) drawAudioContent(g, v, p, ch, c, x, cy, chh, P, vx0, vx1);
     else if (au) drawAutoContent(g, v, au, c, x, w, cy, chh, P, color, !!c.muted);
   }
-  // name
-  if (w > 18) {
+  // kind glyph + name (FL: "▤ Name" on the title strip)
+  if (w > 12) {
     g.font = FONT;
     g.textBaseline = 'middle';
-    const tx = Math.max(x, 0) + 4;
-    if (th) {
-      g.fillStyle = P.text;
-      g.fillText(name, tx, y + th / 2 + 0.5);
-    } else if (h >= 12) {
-      g.fillStyle = 'rgba(255,255,255,0.85)';
-      g.fillText(name, tx, y + h / 2 + 0.5);
+    const lx = Math.max(x, 0) + 3;
+    const ly = th ? y + th / 2 + 0.5 : y + Math.min(h, 16) / 2 + 0.5;
+    if (th || h >= 12) {
+      drawKindGlyph(g, c.kind, lx, Math.round(ly) - 0.5, P.text);
+      if (w > 22) {
+        g.fillStyle = P.shadow;
+        g.fillText(name, lx + 12, ly + 1);
+        g.fillStyle = P.text;
+        g.fillText(name, lx + 11.5, ly);
+      }
     }
   }
   if (c.group) {
@@ -436,7 +476,7 @@ export function drawClip(g: CanvasRenderingContext2D, v: View, p: Project, L: Lo
   }
   g.restore();
   // outline
-  roundRect(g, rx + 0.5, y + 0.5, rw - 1, h - 1, 3);
+  roundRect(g, rx + 0.5, y + 0.5, rw - 1, h - 1, 2);
   if (selected) {
     g.lineWidth = 1.6;
     g.strokeStyle = '#ffffff';
@@ -525,7 +565,7 @@ function drawAutoContent(g: CanvasRenderingContext2D, v: View, a: Automation, c:
   line.moveTo(x, vy(autoValueAt(a, t0)));
   for (const pnt of a.points) if (pnt.t > t0 && pnt.t < t1) line.lineTo(tx(pnt.t), vy(pnt.v));
   line.lineTo(x + w, vy(autoValueAt(a, t1)));
-  g.strokeStyle = muted ? P.content : color;
+  g.strokeStyle = P.content;
   g.lineWidth = 1.5;
   g.lineJoin = 'round';
   g.stroke(line);
@@ -544,10 +584,10 @@ function drawAutoHandles(g: CanvasRenderingContext2D, v: View, a: Automation, c:
     const r = i === hoverPoint ? 4.2 : 3;
     g.beginPath();
     g.arc(px, py, r, 0, Math.PI * 2);
-    g.fillStyle = i === hoverPoint ? '#ffffff' : P.title;
+    g.fillStyle = i === hoverPoint ? '#ffffff' : P.content;
     g.fill();
     g.lineWidth = 1.2;
-    g.strokeStyle = '#101417';
+    g.strokeStyle = P.edge;
     g.stroke();
     g.lineWidth = 1;
   });
@@ -663,7 +703,7 @@ export function drawMain(g: CanvasRenderingContext2D, v: View, p: Project, L: Lo
 }
 
 // ---------------------------------------------------------------------------
-// ruler
+// ruler (FL: bar numbers on top, marker / loop row below)
 // ---------------------------------------------------------------------------
 export interface RulerState {
   loop: { start: number; end: number } | null;
@@ -674,108 +714,230 @@ export interface RulerState {
 }
 
 export const RULER_H = 30;
+const RULER_SPLIT = 15;
 
 export function drawRuler(g: CanvasRenderingContext2D, v: View, p: Project, r: RulerState) {
-  const W = v.w, H = RULER_H, { ppt, sx } = v;
+  const W = v.w, H = RULER_H, S = RULER_SPLIT, { ppt, sx } = v;
   g.setTransform(v.dpr, 0, 0, v.dpr, 0, 0);
-  const grd = g.createLinearGradient(0, 0, 0, H);
-  grd.addColorStop(0, '#465057');
-  grd.addColorStop(1, '#3a4248');
-  g.fillStyle = grd;
-  g.fillRect(0, 0, W, H);
+  const top = g.createLinearGradient(0, 0, 0, S);
+  top.addColorStop(0, '#45535b');
+  top.addColorStop(1, '#3c4950');
+  g.fillStyle = top;
+  g.fillRect(0, 0, W, S);
+  g.fillStyle = '#323e44';
+  g.fillRect(0, S, W, H - S);
+  g.fillStyle = 'rgba(0,0,0,0.35)';
+  g.fillRect(0, S, W, 1);
   const bar = barLen(p.timeSig);
   const beat = (PPQ * 4) / p.timeSig[1];
   const t0 = sx / ppt, t1 = (sx + W) / ppt;
-  // loop band
+  // loop band (time selection) in the marker row
   if (r.loop && r.loop.end > r.loop.start) {
     const a = r.loop.start * ppt - sx, b = r.loop.end * ppt - sx;
-    g.fillStyle = 'rgba(79,198,230,0.26)';
-    g.fillRect(a, 13, b - a, H - 13);
+    g.fillStyle = 'rgba(100,195,230,0.24)';
+    g.fillRect(a, S + 1, b - a, H - S - 1);
     g.fillStyle = COL.accent2;
-    g.fillRect(a, 13, b - a, 2);
-    g.fillRect(Math.round(a), 13, 1, H - 13);
-    g.fillRect(Math.round(b) - 1, 13, 1, H - 13);
+    g.fillRect(a, S + 1, b - a, 2);
+    g.fillRect(Math.round(a), S + 1, 1, H - S - 1);
+    g.fillRect(Math.round(b) - 1, S + 1, 1, H - S - 1);
   }
   // past-the-end dimming
   const endX = r.songEnd * ppt - sx;
   if (endX < W) {
-    g.fillStyle = 'rgba(0,0,0,0.16)';
+    g.fillStyle = 'rgba(0,0,0,0.18)';
     g.fillRect(Math.max(0, endX), 0, W - Math.max(0, endX), H);
   }
   // ticks + labels
   let labelEvery = 1;
-  while (labelEvery * bar * ppt < 34 && labelEvery < 4096) labelEvery *= 2;
+  while (labelEvery * bar * ppt < 30 && labelEvery < 4096) labelEvery *= 2;
   g.font = FONT_RULER;
   g.textBaseline = 'alphabetic';
   if (beat * ppt >= 7) {
-    g.fillStyle = 'rgba(255,255,255,0.16)';
+    g.fillStyle = 'rgba(255,255,255,0.14)';
     for (let t = Math.floor(t0 / beat) * beat; t <= t1; t += beat) {
       if (t % bar === 0) continue;
-      g.fillRect(Math.round(t * ppt - sx), H - 4, 1, 4);
+      g.fillRect(Math.round(t * ppt - sx), S - 4, 1, 4);
     }
   }
   const tickEvery = bar * ppt >= 5 ? 1 : labelEvery;
   for (let b = Math.floor(t0 / bar / tickEvery) * tickEvery; b * bar <= t1; b += tickEvery) {
     const xx = Math.round(b * bar * ppt - sx);
     const lab = b % labelEvery === 0;
-    g.fillStyle = lab ? 'rgba(255,255,255,0.42)' : 'rgba(255,255,255,0.22)';
-    g.fillRect(xx, lab ? H - 11 : H - 7, 1, lab ? 11 : 7);
+    g.fillStyle = lab ? 'rgba(255,255,255,0.4)' : 'rgba(255,255,255,0.18)';
+    g.fillRect(xx, lab ? 2 : S - 6, 1, lab ? S - 2 : 6);
     if (lab) {
-      g.fillStyle = b * bar < r.songEnd ? '#c9d3db' : '#7d8a95';
+      g.fillStyle = b * bar < r.songEnd ? '#e3eaee' : '#8e9ba3';
       g.fillText(String(b + 1), xx + 3, 11);
     }
   }
   // song end marker
   if (endX > -10 && endX < W + 10) {
-    g.fillStyle = '#9aa7b0';
+    g.fillStyle = '#a9b6be';
+    g.fillRect(Math.round(endX) - 1, S + 1, 1, H - S - 1);
     g.beginPath();
-    g.moveTo(endX, 13);
-    g.lineTo(endX, H);
-    g.lineTo(endX - 1, H);
-    g.lineTo(endX - 1, 13);
-    g.closePath();
-    g.fill();
-    g.beginPath();
-    g.moveTo(endX, 13);
-    g.lineTo(endX + 7, 16.5);
-    g.lineTo(endX, 20);
+    g.moveTo(endX, S + 2);
+    g.lineTo(endX + 7, S + 5.5);
+    g.lineTo(endX, S + 9);
     g.closePath();
     g.fill();
   }
   // hover tick
   if (r.hoverTick !== null) {
     const hx = Math.round(r.hoverTick * ppt - sx);
-    g.fillStyle = 'rgba(255,255,255,0.18)';
-    g.fillRect(hx, 13, 1, H - 13);
+    g.fillStyle = 'rgba(255,255,255,0.2)';
+    g.fillRect(hx, 0, 1, H);
   }
-  // song position marker
+  // song position marker (FL: light green ▼ in the marker row)
   const mx = r.songStart * ppt - sx;
   if (mx > -10 && mx < W + 10) {
-    g.fillStyle = r.playhead === null ? COL.accent : 'rgba(246,164,50,0.55)';
+    g.fillStyle = r.playhead === null ? COL.marker : 'rgba(180,224,92,0.5)';
     g.beginPath();
-    g.moveTo(mx - 6, 14);
-    g.lineTo(mx + 6, 14);
-    g.lineTo(mx + 6, 19);
+    g.moveTo(mx - 6, S + 1);
+    g.lineTo(mx + 6, S + 1);
+    g.lineTo(mx + 6, S + 5);
     g.lineTo(mx, H - 1);
-    g.lineTo(mx - 6, 19);
+    g.lineTo(mx - 6, S + 5);
     g.closePath();
     g.fill();
-    g.strokeStyle = 'rgba(0,0,0,0.45)';
+    g.strokeStyle = 'rgba(0,0,0,0.5)';
+    g.lineWidth = 1;
     g.stroke();
   }
   if (r.playhead !== null) {
     const px = r.playhead * ppt - sx;
     if (px > -10 && px < W + 10) {
-      g.fillStyle = '#7dffa8';
+      g.fillStyle = COL.play;
       g.beginPath();
-      g.moveTo(px - 5, 15);
-      g.lineTo(px + 5, 15);
+      g.moveTo(px - 5, S + 2);
+      g.lineTo(px + 5, S + 2);
       g.lineTo(px, H - 2);
       g.closePath();
       g.fill();
-      g.fillRect(Math.round(px), 15, 1, H - 15);
+      g.fillRect(Math.round(px), 0, 1, H);
     }
   }
-  g.fillStyle = '#22292d';
+  g.fillStyle = '#1f282c';
   g.fillRect(0, H - 1, W, 1);
+}
+
+// ---------------------------------------------------------------------------
+// overview strip (FL: whole-song mini map above the timeline, visible range box)
+// ---------------------------------------------------------------------------
+export const OVERVIEW_H = 16;
+export interface OverviewState {
+  total: number; // ticks mapped onto the strip width
+  songStart: number;
+  playhead: number | null;
+  loop: { start: number; end: number } | null;
+}
+let ovCache: { key: string; cv: HTMLCanvasElement } | null = null;
+
+/** Visible window of the overview, in strip px. */
+export function overviewRange(v: View, total: number, w: number) {
+  const k = w / Math.max(1, total);
+  const x0 = (v.sx / v.ppt) * k;
+  const x1 = ((v.sx + v.w) / v.ppt) * k;
+  return { x0, x1, k };
+}
+
+export function drawOverview(g: CanvasRenderingContext2D, v: View, p: Project, L: Lookup, w: number, o: OverviewState) {
+  const H = OVERVIEW_H;
+  g.setTransform(v.dpr, 0, 0, v.dpr, 0, 0);
+  const nT = Math.max(8, L.byTrack.length);
+  const key = `${gen}|${w}|${o.total}|${v.dpr}|${nT}`;
+  if (!ovCache || ovCache.key !== key) {
+    const cv = ovCache?.cv ?? document.createElement('canvas');
+    cv.width = Math.max(1, Math.ceil(w * v.dpr));
+    cv.height = Math.ceil(H * v.dpr);
+    const c = cv.getContext('2d')!;
+    c.setTransform(v.dpr, 0, 0, v.dpr, 0, 0);
+    c.fillStyle = '#273136';
+    c.fillRect(0, 0, w, H);
+    const k = w / Math.max(1, o.total);
+    // bar ticks every 4 / 16 bars depending on density
+    const bar = barLen(p.timeSig);
+    let every = 4;
+    while (every * bar * k < 8 && every < 4096) every *= 2;
+    c.fillStyle = 'rgba(255,255,255,0.045)';
+    for (let t = 0; t <= o.total; t += every * bar) c.fillRect(Math.round(t * k), 0, 1, H);
+    const rh = (H - 4) / nT;
+    for (let i = 0; i < L.byTrack.length; i++) {
+      const list = L.byTrack[i];
+      if (!list?.length) continue;
+      const y = 2 + i * rh;
+      const hh = Math.max(1, rh - (rh >= 3 ? 0.6 : 0));
+      for (const cl of list) {
+        const col = cl.kind === 'pattern' ? L.pat.get(cl.ref)?.color : cl.kind === 'audio' ? L.ch.get(cl.ref)?.color : L.auto.get(cl.ref)?.color;
+        c.globalAlpha = cl.muted ? 0.35 : 0.95;
+        c.fillStyle = col ?? '#7d8a91';
+        c.fillRect(cl.start * k, y, Math.max(1, cl.len * k - 0.5), hh);
+      }
+    }
+    c.globalAlpha = 1;
+    ovCache = { key, cv };
+  }
+  g.drawImage(ovCache.cv, 0, 0, w, H);
+  if (o.loop && o.loop.end > o.loop.start) {
+    const k = w / Math.max(1, o.total);
+    g.fillStyle = 'rgba(100,195,230,0.22)';
+    g.fillRect(o.loop.start * k, 0, (o.loop.end - o.loop.start) * k, H);
+  }
+  const { x0, x1, k } = overviewRange(v, o.total, w);
+  const a = Math.max(0, Math.min(w - 4, x0)), b = Math.max(a + 4, Math.min(w, x1));
+  g.fillStyle = 'rgba(255,255,255,0.10)';
+  g.fillRect(a, 0, b - a, H);
+  g.strokeStyle = 'rgba(235,242,245,0.8)';
+  g.lineWidth = 1;
+  g.strokeRect(Math.round(a) + 0.5, 0.5, Math.max(3, Math.round(b - a) - 1), H - 1);
+  const pos = o.playhead ?? o.songStart;
+  g.fillStyle = o.playhead !== null ? COL.play : COL.marker;
+  g.fillRect(Math.round(pos * k), 0, 1, H);
+  g.fillStyle = '#1b2327';
+  g.fillRect(0, H - 1, w, 1);
+}
+
+// ---------------------------------------------------------------------------
+// clip-source previews for the picker (pattern notes / audio waveform / automation curve)
+// ---------------------------------------------------------------------------
+export function previewSignature(p: Project, kind: Clip['kind'], ref: ID): string {
+  if (kind === 'pattern') {
+    const pt = p.patterns.find((x) => x.id === ref);
+    return pt ? 'p' + patLayout(p, pt).sig : '';
+  }
+  if (kind === 'audio') {
+    const ch = p.channels.find((x) => x.id === ref);
+    const r = ch?.sampler?.sampleRef ?? '';
+    return `a|${r}|${samples.get(r) ? 1 : 0}|${ch?.sampler?.reverse ? 1 : 0}`;
+  }
+  const a = p.automations.find((x) => x.id === ref);
+  return a ? `x|${a.length}|${a.points.map((q) => q.t + ':' + q.v).join(',')}` : '';
+}
+
+export function drawSourcePreview(g: CanvasRenderingContext2D, p: Project, kind: Clip['kind'], ref: ID, w: number, h: number, dpr: number, color: string) {
+  g.clearRect(0, 0, w, h);
+  if (kind === 'pattern') {
+    const pt = p.patterns.find((x) => x.id === ref);
+    if (!pt) return;
+    const L = patLayout(p, pt);
+    if (!L.notes.length || L.plen <= 0) return;
+    drawNotes(g, L, 0, 1, h - 2, w / L.plen, color);
+  } else if (kind === 'audio') {
+    const ch = p.channels.find((x) => x.id === ref);
+    const r = ch?.sampler?.sampleRef;
+    if (!r) return;
+    const pk = peaksFor(r, Math.ceil(w * dpr));
+    if (pk) drawWave(g, pk, !!ch?.sampler?.reverse, 0, 1, w, h - 2, 1 / dpr, color, 0, w);
+  } else {
+    const a = p.automations.find((x) => x.id === ref);
+    if (!a || !a.points.length) return;
+    const len = Math.max(1, a.length);
+    const yv = (val: number) => 2 + (1 - clamp(val, 0, 1)) * (h - 4);
+    g.beginPath();
+    g.moveTo(0, yv(autoValueAt(a, 0)));
+    for (const q of a.points) g.lineTo((q.t / len) * w, yv(q.v));
+    g.lineTo(w, yv(autoValueAt(a, len)));
+    g.strokeStyle = color;
+    g.lineWidth = 1.4;
+    g.stroke();
+  }
 }
