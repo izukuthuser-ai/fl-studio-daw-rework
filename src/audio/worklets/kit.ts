@@ -29,6 +29,8 @@ export abstract class InstrumentProcessor extends AudioWorkletProcessor {
   protected bpm = 120;
   protected state: any = null;
   private queue: NoteEvent[] = [];
+  private qHead = 0; // index of the next pending event (no shift() on the audio thread)
+  private macroBuf = [0, 0, 0, 0];
   private vizOn = false;
   private vizCountdown = 0;
 
@@ -46,6 +48,14 @@ export abstract class InstrumentProcessor extends AudioWorkletProcessor {
     this.initPending = !!this.state;
   }
   private initPending = false;
+
+  /** Drop already-applied events from the front (called from message handling, not from render). */
+  private compact() {
+    if (this.qHead) {
+      this.queue = this.queue.slice(this.qHead);
+      this.qHead = 0;
+    }
+  }
 
   private handle(m: HostMsg) {
     if (this.initPending && this.state) {
@@ -69,10 +79,12 @@ export abstract class InstrumentProcessor extends AudioWorkletProcessor {
         break;
       case 'alloff':
         // drop pending note-ons; apply the all-off at its time
+        this.compact();
         this.queue = this.queue.filter((e) => e.kind !== 'on' || e.time < m.time);
         this.push({ kind: 'alloff', time: m.time, hard: !!m.hard });
         break;
       case 'cancel': {
+        this.compact();
         const cancelled = new Set<number>();
         this.queue = this.queue.filter((e) => {
           if (e.time > m.after && e.kind === 'on') {
@@ -98,9 +110,11 @@ export abstract class InstrumentProcessor extends AudioWorkletProcessor {
 
   private push(e: NoteEvent) {
     // keep sorted by time (stable): most events arrive in order, so insert from the end
+    if (this.qHead > 256) this.compact();
     let i = this.queue.length;
-    while (i > 0 && this.queue[i - 1].time > e.time) i--;
-    this.queue.splice(i, 0, e);
+    while (i > this.qHead && this.queue[i - 1].time > e.time) i--;
+    if (i === this.queue.length) this.queue.push(e);
+    else this.queue.splice(i, 0, e);
   }
 
   process(_inputs: Float32Array[][], outputs: Float32Array[][], params: Record<string, Float32Array>): boolean {
@@ -112,12 +126,16 @@ export abstract class InstrumentProcessor extends AudioWorkletProcessor {
     if (!out || !out.length) return true;
     const n = out[0].length;
     for (const ch of out) ch.fill(0);
-    const macros = [params.macro1?.[0] ?? 0, params.macro2?.[0] ?? 0, params.macro3?.[0] ?? 0, params.macro4?.[0] ?? 0];
+    const macros = this.macroBuf;
+    macros[0] = params.macro1?.[0] ?? 0;
+    macros[1] = params.macro2?.[0] ?? 0;
+    macros[2] = params.macro3?.[0] ?? 0;
+    macros[3] = params.macro4?.[0] ?? 0;
     const t0 = currentTime;
     const spf = 1 / sampleRate;
     let pos = 0;
-    while (this.queue.length) {
-      const e = this.queue[0];
+    while (this.qHead < this.queue.length) {
+      const e = this.queue[this.qHead];
       const frame = Math.floor((e.time - t0) / spf + 1e-6);
       if (frame >= n) break;
       const at = Math.max(pos, Math.min(n, frame));
@@ -125,8 +143,12 @@ export abstract class InstrumentProcessor extends AudioWorkletProcessor {
         this.render(out, pos, at, macros);
         pos = at;
       }
-      this.queue.shift();
+      this.qHead++;
       this.apply(e);
+    }
+    if (this.qHead && this.qHead === this.queue.length) {
+      this.queue.length = 0;
+      this.qHead = 0;
     }
     if (pos < n) this.render(out, pos, n, macros);
     if (this.vizOn && --this.vizCountdown <= 0) {

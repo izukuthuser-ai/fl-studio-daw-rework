@@ -148,6 +148,8 @@ export class AudioGraph {
   project!: Project;
   automated = new Set<string>();
 
+  /** Offline export: don't build mixer inserts that nothing audible feeds. */
+  prune = false;
   constructor(public ctx: BaseAudioContext, public samples: SampleBank, private meters = true) {
     this.out = ctx.createGain();
     this.out.connect(ctx.destination);
@@ -174,8 +176,24 @@ export class AudioGraph {
     const live = new Set<ID>();
     // ---- mixer ----
     const order: MixerStrip[] = [];
+    let needed: Set<number> | null = null;
+    if (this.prune) {
+      needed = new Set([0]);
+      for (const c of p.channels) {
+        if (c.mute) continue;
+        let cur = c.mixer;
+        for (let guard = 0; cur > 0 && cur < p.mixer.length && !needed.has(cur) && guard < 256; guard++) {
+          needed.add(cur);
+          cur = p.mixer[cur].route;
+        }
+      }
+    }
     p.mixer.forEach((t, i) => {
       let s: MixerStrip;
+      if (needed && !needed.has(i)) {
+        order.push(undefined as unknown as MixerStrip);
+        return;
+      }
       if (i === 0) {
         s = this.master;
         s.id = t.id;
@@ -194,6 +212,7 @@ export class AudioGraph {
     const anySolo = false;
     p.mixer.forEach((t, i) => {
       const s = order[i];
+      if (!s) return;
       s.setFx(t.fx, p.bpm);
       const k = (param: string) => this.automated.has(`mixer:${t.id}:${param}`);
       if (!k('volDb')) setSmooth(ctx, s.fader.gain, dbToGain(t.volDb));
@@ -203,7 +222,7 @@ export class AudioGraph {
       if (i === 0) s.connectTo(this.out, 'out');
       else {
         let r = t.route;
-        if (r < 0 || r >= order.length || r === i) r = 0;
+        if (r < 0 || r >= order.length || r === i || !order[r]) r = 0;
         s.connectTo(order[r].input, order[r].id);
       }
     });

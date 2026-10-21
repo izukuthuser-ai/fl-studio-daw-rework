@@ -163,7 +163,13 @@ export function el<K extends keyof HTMLElementTagNameMap>(
   for (const [k, v] of Object.entries(attrs)) {
     if (v === undefined || v === null || v === false) continue;
     if (k === 'class') e.className = v;
-    else if (k === 'style' && typeof v === 'object') Object.assign(e.style, v);
+    else if (k === 'style' && typeof v === 'object') {
+      for (const [sk, sv] of Object.entries(v as Record<string, any>)) {
+        if (sv === undefined || sv === null) continue;
+        if (sk.startsWith('--')) e.style.setProperty(sk, String(sv));
+        else (e.style as any)[sk] = sv;
+      }
+    }
     else if (k.startsWith('on') && typeof v === 'function') (e as any)[k.toLowerCase()] = v;
     else if (k === 'text') e.textContent = v;
     else if (k === 'html') e.innerHTML = v;
